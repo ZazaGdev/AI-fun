@@ -1,0 +1,151 @@
+<title>API Shadow Bill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;600&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+/* Layout: one receipt-style card, centred; summary first, itemised lines, then breakdowns */
+:root{
+  --bg:#e9ece8; --paper:#fbfbf8; --ink:#1d2321; --muted:#5f6b66; --rule:#cfd6d1;
+  --accent:#1f6f5c; --accent-soft:#d7ebe4; --stamp:#b23a2e; --bar:#9cc7b9;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --body:"Source Sans 3",ui-sans-serif,system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111614; --paper:#1a211e; --ink:#e7ece9; --muted:#9aa8a2; --rule:#2f3a36;
+  --accent:#5cc2a4; --accent-soft:#1f3a32; --stamp:#ff7b6b; --bar:#2f7d68; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111614; --paper:#1a211e; --ink:#e7ece9; --muted:#9aa8a2; --rule:#2f3a36;
+  --accent:#5cc2a4; --accent-soft:#1f3a32; --stamp:#ff7b6b; --bar:#2f7d68; color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);padding-inline:16px;padding-block:28px 40px}
+.card{max-width:560px;margin:0 auto;background:var(--paper);border-radius:14px;padding:26px 22px 22px;box-shadow:0 1px 0 var(--rule),0 18px 40px -24px rgba(0,0,0,.35);display:grid;gap:22px}
+.eyebrow{font:600 11px/1.4 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+h1{font:700 30px/1.05 var(--display);margin:6px 0 0;text-wrap:balance}
+h2{font:700 15px var(--display);margin:0 0 10px}
+.tabs{display:flex;flex-wrap:wrap;gap:6px}
+.tabs button{font:600 13px var(--body);border:1px solid var(--rule);background:transparent;color:var(--ink);padding:7px 12px;border-radius:999px;cursor:pointer}
+.tabs button[aria-pressed="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hero{display:grid;gap:6px}
+.big{font:700 52px/1 var(--display);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:15px}
+.receipt{border-top:1px dashed var(--rule);border-bottom:1px dashed var(--rule);padding-block:12px;display:grid;gap:8px;font-family:var(--mono);font-size:13px}
+.line{display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:baseline;font-variant-numeric:tabular-nums}
+.line .t{color:var(--muted);text-align:right}
+.line.total{border-top:1px solid var(--rule);padding-top:8px;font-weight:600}
+.bars{display:grid;gap:8px}
+.bar{display:grid;grid-template-columns:minmax(0,8.5rem) 1fr auto;gap:10px;align-items:center;font-size:13px}
+.bar .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar .track{height:8px;background:var(--rule);border-radius:4px;overflow:hidden}
+.bar .fill{display:block;height:100%;background:var(--accent);border-radius:4px}
+.bar .v{font:600 12px var(--mono);font-variant-numeric:tabular-nums;min-width:4.5rem;text-align:right}
+.spark svg{width:100%;height:auto;display:block}
+.foot{font-size:12px;color:var(--muted);line-height:1.5;display:grid;gap:8px}
+.cmd{font:600 12px var(--mono);background:var(--bg);color:var(--ink);padding:8px 10px;border-radius:6px;overflow-x:auto;white-space:nowrap}
+@media (prefers-reduced-motion:no-preference){.fill{transition:width .4s ease}}
+.warn{font-size:13px;padding:10px 12px;border-radius:8px;border:1px solid var(--stamp);color:var(--stamp)}
+.rates{width:100%;border-collapse:collapse;font:12px var(--mono);font-variant-numeric:tabular-nums}
+.rates th,.rates td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--rule)}
+.rates th:first-child,.rates td:first-child{text-align:left}
+.rates th{font-weight:600;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+</style>
+
+<main class="card" aria-live="polite">
+  <header>
+    <div class="eyebrow" id="eyebrow">Claude Code on this PC</div>
+    <h1>What your sessions would cost on the API</h1>
+  </header>
+  <div class="tabs" role="group" aria-label="Time frame" id="tabs"></div>
+  <section class="hero">
+    <div class="big" id="big">$0</div>
+    <div class="sub" id="sub"></div>
+  </section>
+  <div class="warn" id="stale" hidden></div>
+  <div class="warn" id="unpriced" hidden></div>
+  <section>
+    <h2>Itemised</h2>
+    <div class="receipt" id="receipt"></div>
+  </section>
+  <section>
+    <h2>By model</h2>
+    <div class="bars" id="models"></div>
+  </section>
+  <section>
+    <h2>Top projects</h2>
+    <div class="bars" id="projects"></div>
+  </section>
+  <section class="spark" id="sparkwrap">
+    <h2>Per day</h2>
+    <div id="spark"></div>
+  </section>
+  <section>
+    <h2>Prices used, per million tokens</h2>
+    <div class="tablewrap"><table class="rates" id="rates"></table></div>
+  </section>
+  <footer class="foot">
+    <div class="cmd">/api-bill 7d &nbsp;·&nbsp; /api-bill 30d &nbsp;·&nbsp; /api-bill 6m &nbsp;·&nbsp; /api-bill all</div>
+    <div id="note"></div>
+  </footer>
+</main>
+
+<script>
+const D=__DATA__;
+const $=id=>document.getElementById(id);
+const money=n=>'$'+n.toLocaleString('en-US',{maximumFractionDigits:n<100?2:0,minimumFractionDigits:n<100?2:0});
+const tok=n=>n>=1e9?(n/1e9).toFixed(1)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'K':String(n);
+const fmtDate=s=>new Date(s+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+const short={'24h':'24 hours','7d':'7 days','30d':'30 days','all':'All time'};
+let cur=D.current;
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+function bars(target,obj,nameFn){
+  const box=$(target);box.replaceChildren();
+  const max=Math.max(...Object.values(obj),1);
+  for(const [k,v] of Object.entries(obj)){
+    const row=el('div','bar');row.append(el('span','name',nameFn(k)));
+    const tr=el('span','track');const f=el('span','fill');f.style.width=(v/max*100).toFixed(1)+'%';tr.append(f);
+    row.append(tr,el('span','v',money(v)));box.append(row);
+  }
+}
+function render(){
+  const d=D.frames[cur];
+  for(const b of $('tabs').children)b.setAttribute('aria-pressed',String(b.dataset.k===cur));
+  $('big').textContent=money(d.cost);
+  const t=d.tokens;
+  $('sub').textContent=d.label+' (since '+fmtDate(d.since)+') · '+d.sessions+' sessions · '+(t.msgs||0).toLocaleString('en-US')+' replies';
+  const r=$('receipt');r.replaceChildren();
+  const rows=[['Cache reads',tok(t.read||0)+' tok',d.split.rd],['Cache writes',tok(t.write||0)+' tok',d.split.wr],['Output',tok(t.output||0)+' tok',d.split.out],['Fresh input',tok(t.input||0)+' tok',d.split.in]];
+  if(d.split.search)rows.push(['Web searches',d.searches+' searches',d.split.search]);
+  for(const [n,tk,c] of rows){const l=el('div','line');l.append(el('span',null,n),el('span','t',tk),el('span',null,money(c)));r.append(l)}
+  const tl=el('div','line total');tl.append(el('span',null,'API total'),el('span','t',''),el('span',null,money(d.cost)));r.append(tl);
+  bars('models',d.models,k=>d.model_names[k]||k);
+  bars('projects',d.projects,k=>k);
+  const sw=$('sparkwrap');sw.hidden=d.daily.length<3;
+  if(!sw.hidden)spark(d.daily);
+  const up=Object.entries(d.unpriced);const u=$('unpriced');u.hidden=!up.length;
+  u.textContent=up.length?'Left out, no list price found: '+up.map(([m,n])=>m+' ('+n+' replies)').join(', ')+'. The total is lower than the true figure by their cost.':'';
+}
+function spark(days){
+  const W=520,H=110,P=24,n=days.length,max=Math.max(...days.map(x=>x[1]));
+  const ns='http://www.w3.org/2000/svg';const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 '+W+' '+(H+P));svg.setAttribute('role','img');svg.setAttribute('aria-label','API cost per day');
+  const bw=W/n;
+  days.forEach(([day,v],i)=>{const h=Math.max(1,v/max*(H-6));const r=document.createElementNS(ns,'rect');r.setAttribute('x',(i*bw+1).toFixed(1));r.setAttribute('y',(H-h).toFixed(1));r.setAttribute('width',Math.max(1,bw-2).toFixed(1));r.setAttribute('height',h.toFixed(1));r.setAttribute('rx','2');r.setAttribute('fill',v===max?'var(--accent)':'var(--bar)');const tt=document.createElementNS(ns,'title');tt.textContent=day+': '+money(v);r.append(tt);svg.append(r)});
+  const lab=(x,txt,anchor)=>{const t=document.createElementNS(ns,'text');t.setAttribute('x',x);t.setAttribute('y',H+17);t.setAttribute('font-size','11');t.setAttribute('font-family','JetBrains Mono, monospace');t.setAttribute('fill','var(--muted)');t.setAttribute('text-anchor',anchor);t.textContent=txt;svg.append(t)};
+  const fmt=s=>new Date(s+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  lab(2,fmt(days[0][0]),'start');lab(W-2,fmt(days[n-1][0]),'end');
+  const top=days.find(x=>x[1]===max);lab(W/2,'peak '+money(max)+', '+fmt(top[0]),'middle');
+  $('spark').replaceChildren(svg);
+}
+function rates(){
+  const tb=$('rates');tb.replaceChildren();
+  const hr=el('tr');for(const h of ['Model','Input','Write 5m','Write 1h','Read','Output'])hr.append(el('th',null,h));tb.append(hr);
+  const row=(name,p)=>{const tr=el('tr');tr.append(el('td',null,name));for(const k of ['input','write_5m','write_1h','read','output'])tr.append(el('td',null,p[k]==null?'-':'$'+(+p[k].toFixed(3))));tb.append(tr)};
+  for(const p of Object.values(D.prices.models))row(p.name.replace(/^Claude /,''),p);
+  for(const [k,p] of Object.entries(D.prices.fast)){const base=D.prices.models[k];row((base?base.name.replace(/^Claude /,''):k)+' fast',{input:p.input,output:p.output})}
+}
+for(const k of D.order){const b=document.createElement('button');b.type='button';b.dataset.k=k;b.textContent=short[k]||D.frames[k].label;b.addEventListener('click',()=>{cur=k;try{localStorage.setItem('apibill-tab',k)}catch(e){}render()});$('tabs').append(b)}
+$('eyebrow').textContent='Claude Code on this PC · made '+D.generated;
+const pr=D.prices;
+if(pr.stale){$('stale').hidden=false;$('stale').textContent='The live pricing page could not be reached, so these are the prices last fetched on '+fmtDate(pr.fetched)+'.'}
+$('note').textContent='Every reply in this PC\'s Claude Code session logs (first one '+fmtDate(D.first)+'), subagents included, priced at the list API rate of the model that wrote it, as published on Anthropic\'s pricing page (fetched '+fmtDate(pr.fetched)+(pr.stale?', not live':'')+'). Standard rates: no batch discount, no data residency premium; fast-mode replies at fast-mode rates.'+(pr.web_search_per_1k?' Web searches at $'+pr.web_search_per_1k+' per 1,000.':'')+' Only this PC\'s logs count, so the true figure is at least this.';
+rates();render();
+</script>
