@@ -22,7 +22,8 @@ Artifacts, the card is also published as a private claude.ai page that only you 
 - Reads your local Claude Code logs. They never leave your machine.
 - Fetches one public page: Anthropic's pricing page, for the current rates.
 - Writes its card and the last fetched prices to `~/api-bill/`.
-- Nothing is sent anywhere else.
+- The card loads its fonts from Google Fonts when you open it.
+- Nothing else is sent anywhere.
 
 **Install**
 
