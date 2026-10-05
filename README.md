@@ -1,6 +1,7 @@
 # AI-fun
 
-Small things for working with AI tools. Each one lives in its own folder.
+Small things for working with AI tools. Skills live in `skills/`, standalone prompts
+in `prompts/`.
 
 ## Skills
 
@@ -56,6 +57,14 @@ python ~/.claude/skills/api-bill/scripts/apibill.py 30d --open
 
 The script opens the card the Windows way and falls back to your default browser on
 other systems.
+
+**Or just paste a prompt**
+
+If you would rather not install a skill, [prompts/api-bill-prompt.md](prompts/api-bill-prompt.md)
+is a single prompt you paste into Claude Code. It asks Claude to do the same job
+from scratch: read your local logs for a time frame, price every reply at the live
+list prices and make the same kind of card. The skill runs fixed, tested code; the
+prompt has Claude write the code fresh each time, so the card's look can vary.
 
 ## Licence
 
