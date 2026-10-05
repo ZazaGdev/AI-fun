@@ -1,11 +1,13 @@
 # API bill prompt
 
-The same result as the `api-bill` skill, without installing anything. Paste everything
-below the line into Claude Code and change the time frame on the first line if you
-want another one (`24h`, `7d`, `2w`, `30d`, `6m`, `1y` or `all`).
+The same result as the `api-bill` skill, without installing anything. Copy the block
+below (the copy button is at its top right), paste it into Claude Code and change the
+time frame on its first line if you want another one (`24h`, `7d`, `2w`, `30d`, `6m`,
+`1y` or `all`).
 
----
+## ⬇️ COPY FROM HERE
 
+```text
 Time frame: 30d
 
 Work out what my Claude Code sessions in this time frame would cost if I had paid for
@@ -59,3 +61,6 @@ results anywhere.
 
 Do not compare with my subscription price. This is what the same work would cost on
 the API, nothing more.
+```
+
+## ⬆️ COPY UNTIL HERE
