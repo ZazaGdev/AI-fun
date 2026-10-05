@@ -25,7 +25,18 @@ description: Use when the owner asks what their Claude Code use would cost on th
    - If the Artifact tool is not available in this session, give the local card
      path instead and offer to open it (`$BILL <timeframe> --open`).
 4. Reply with the script's first line (the API cost), the per-model split, any
-   unpriced models, a stale-price warning if the script printed one, and the link.
+   unpriced models, a stale-price warning if the script printed one, the "Includes an
+   estimate" or "No estimate" line if there is one, and the link.
+
+Claude Code deletes session logs after its cleanup period (30 days by default), so
+for longer time frames the days before the oldest kept log come from the running
+totals /stats keeps in `~/.claude/stats-cache.json`. /stats adds up every log line
+and each reply is written as several lines, so its token counts run several times
+high; the script measures that overcount on the days both exist and divides it out.
+That part is an estimate, and its cache writes are priced at the 5-minute rate, so
+it is a lower bound. Per-project and per-day breakdowns cover only the logged days.
+Without the cache file or a day both cover, there is no estimate and the card says
+why.
 
 The card says which prices it used and the date they were fetched. If the live page
 could not be fetched it uses the last saved prices and says so on the card.

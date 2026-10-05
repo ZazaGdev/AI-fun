@@ -27,10 +27,23 @@ results anywhere.
 2. **Usage.** Read every `*.jsonl` file under `~/.claude/projects/`, recursively, so
    subagent logs under `<project>/<session>/subagents/` count too and belong to their
    parent project. Each line is JSON. Keep lines whose `message.usage` and
-   `message.model` are set, skipping the model `<synthetic>`. A reply can appear in
-   several lines: count each `(message.id, requestId)` pair once. Use the line's
-   `timestamp` (ISO, UTC) and keep only replies inside the time frame, counted back
-   from now (`all` means everything; a month is 30.44 days).
+   `message.model` are set, skipping the model `<synthetic>`. A reply is written as
+   several lines that stream, so its usage is only final on the last one: treat each
+   `(message.id, requestId)` pair as one reply and keep each usage field's largest
+   value across its lines, not the first line's. Use the first line's `timestamp`
+   (ISO, UTC) and keep only replies inside the time frame, counted back from now
+   (`all` means everything; a month is 30.44 days).
+
+   Claude Code deletes logs after its cleanup period (30 days by default). If the
+   time frame starts before the oldest log, estimate the missing days from
+   `~/.claude/stats-cache.json` (what /stats shows): `dailyModelTokens` has tokens
+   per day per model, `modelUsage` has each model's split by token type (use it to
+   split a day's tokens), `dailyActivity` has sessions per day. /stats adds up every
+   log line, so it counts each reply several times. Measure that overcount on the
+   full days that have both logs and cache (cache tokens divided by log tokens, all
+   types summed) and divide the missing days by it. Never hard-code the ratio. Price
+   the estimate's cache writes at the 5-minute rate, so it is a lower bound. If the
+   file is missing or no day has both, skip the estimate and say why.
 
 3. **Price each reply** at the rate of the model that wrote it. Map the model id to
    the pricing table by dropping a trailing `[...]`, a leading `claude-`, any
@@ -49,13 +62,17 @@ results anywhere.
    (distinct `sessionId`) and replies, the split by cache reads, cache writes, output,
    fresh input and web searches (tokens and dollars each), cost by model, the top six
    projects (the project is the log's folder name under `~/.claude/projects/`), any
-   unpriced models, and the date the prices were fetched.
+   unpriced models, and the date the prices were fetched. If part of it is the
+   estimate, say how much, for which dates, and the overcount you divided by;
+   projects and per-day cover the logged days only.
 
 5. **Card.** Write the same figures as one self-contained HTML page to
    `~/api-bill/api-bill-<timeframe>-<date>.html` and give me the path: the total in
    large type, the itemised split as a receipt, bars for cost by model and by
-   project, a bar chart of cost per day, and a table of the prices used. Make it
-   readable on a phone and in dark mode. If you can publish Artifacts in this
+   project, a bar chart of cost per day, and a table of the prices used, and the
+   estimate (if any) marked as one. Start the page with `<!doctype html>`,
+   `<meta charset="utf-8">` and a viewport meta tag, so symbols such as "·" and "×"
+   show correctly when opened locally. Make it readable on a phone and in dark mode. If you can publish Artifacts in this
    session, offer to publish the card as a private page. It shows my project names,
    so never make it public.
 

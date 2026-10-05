@@ -8,7 +8,10 @@ subscription price.
 It reads the Claude Code session logs on your own machine (`~/.claude/projects`),
 prices every reply at the live per-model rate from Anthropic's public pricing page,
 and writes an HTML card to `~/api-bill/` with the total, an itemised split, cost by
-model, by project and per day, and the prices it used. When the Claude Code session
+model, by project and per day, and the prices it used. Claude Code deletes logs
+older than its cleanup period (30 days by default), so for longer time frames the
+older days are an estimate from the totals `/stats` keeps, and the card marks them
+as such. When the Claude Code session
 can publish Artifacts, the card is also published as a private claude.ai page that
 only you can see.
 
@@ -20,7 +23,8 @@ Two ways to use it:
 
 ## What it touches
 
-- Reads your local Claude Code logs. They never leave your machine.
+- Reads your local Claude Code logs and the `/stats` totals in
+  `~/.claude/stats-cache.json`. They never leave your machine.
 - Fetches one public page: Anthropic's pricing page, for the current rates.
 - Writes its card and the last fetched prices to `~/api-bill/`.
 - The card loads its fonts from Google Fonts when you open it.

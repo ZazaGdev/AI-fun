@@ -21,6 +21,8 @@ import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
+import precache
+
 PRICING_URL = "https://platform.claude.com/docs/en/about-claude/pricing.md"
 HOME = Path.home()
 OUT = HOME / "api-bill"
@@ -112,7 +114,7 @@ def model_key(model_id):
 
 def read_rows():
     files = glob.glob(str(HOME / ".claude" / "projects" / "**" / "*.jsonl"), recursive=True)
-    seen, rows = set(), []
+    rows = {}  # one row per reply; its log lines stream, so keep each field's largest value
     for f in files:
         proj = os.path.basename(os.path.dirname(f))
         if proj == "subagents":  # <project>/<session>/subagents/x.jsonl
@@ -134,10 +136,6 @@ def read_rows():
                 u, model = msg.get("usage"), msg.get("model", "")
                 if not u or not model or model == "<synthetic>":
                     continue
-                k = (msg.get("id"), d.get("requestId"))
-                if k in seen:
-                    continue
-                seen.add(k)
                 ts = d.get("timestamp")
                 if not ts:
                     continue
@@ -146,14 +144,18 @@ def read_rows():
                 if w5 is None and w1 is None:
                     w5, w1 = u.get("cache_creation_input_tokens") or 0, 0
                 stu = u.get("server_tool_use") or {}
-                rows.append({
-                    "t": dt.datetime.fromisoformat(ts.replace("Z", "+00:00")), "model": model, "proj": proj,
-                    "session": d.get("sessionId"), "fast": u.get("speed") == "fast",
-                    "in": u.get("input_tokens") or 0, "out": u.get("output_tokens") or 0,
-                    "rd": u.get("cache_read_input_tokens") or 0, "w5": w5 or 0, "w1": w1 or 0,
-                    "search": stu.get("web_search_requests") or 0,
-                })
-    return rows
+                k = (msg.get("id"), d.get("requestId"))
+                counts = {"in": u.get("input_tokens") or 0, "out": u.get("output_tokens") or 0,
+                          "rd": u.get("cache_read_input_tokens") or 0, "w5": w5 or 0, "w1": w1 or 0,
+                          "search": stu.get("web_search_requests") or 0}
+                if k in rows:
+                    r = rows[k]
+                    for f2, v in counts.items():
+                        r[f2] = max(r[f2], v)
+                    continue
+                rows[k] = {"t": dt.datetime.fromisoformat(ts.replace("Z", "+00:00")), "model": model, "proj": proj,
+                           "session": d.get("sessionId"), "fast": u.get("speed") == "fast", **counts}
+    return list(rows.values())
 
 
 def rates_for(row, prices):
@@ -184,7 +186,7 @@ def parse_frame(s):
     return days, f"Last {n} {word}{'s' if n != 1 else ''}"
 
 
-def summarise(rows, prices, days, label, now, first):
+def summarise(rows, prices, days, label, now, first, est=None):
     since = now - dt.timedelta(days=days) if days else first
     span = days if days else max((now - first).total_seconds() / 86400, 1 / 24)
     split = defaultdict(float)
@@ -217,6 +219,18 @@ def summarise(rows, prices, days, label, now, first):
         tok["read"] += r["rd"]
         tok["write"] += r["w5"] + r["w1"]
         tok["msgs"] += 1
+    logged_sessions = len(sessions)
+    pre = precache.frame(est, prices, since.astimezone().date().isoformat())
+    if pre:  # days with no logs left, estimated from /stats' running totals
+        for k, v in pre["split"].items():
+            split[k] += v
+        for k, v in pre["models"].items():
+            by_model[k] += v
+        for k, v in pre["tokens"].items():
+            tok[k] += v
+        searches += pre["searches"]
+        pre = {**pre, "cost": round(pre["cost"], 2), "split": {k: round(v, 2) for k, v in pre["split"].items()},
+               "models": {k: round(v, 2) for k, v in pre["models"].items()}}
     total = sum(split.values())
     names = {k: v["name"] for k, v in prices["models"].items()}
     return {
@@ -227,7 +241,8 @@ def summarise(rows, prices, days, label, now, first):
                         for k in by_model},
         "projects": {k: round(v, 2) for k, v in sorted(by_proj.items(), key=lambda x: -x[1])[:6]},
         "daily": sorted([d, round(v, 2)] for d, v in by_day.items()),
-        "sessions": len(sessions), "tokens": dict(tok), "searches": searches,
+        "sessions": logged_sessions + (pre["sessions"] if pre else 0), "tokens": dict(tok), "searches": searches,
+        "est": pre,
         "unpriced": dict(sorted(unpriced.items(), key=lambda x: -x[1])),
         "since": since.astimezone().date().isoformat(),
     }
@@ -246,19 +261,23 @@ def main():
     if not rows:
         sys.exit("No Claude Code usage found in ~/.claude/projects.")
     now = dt.datetime.now(dt.timezone.utc)
-    first = min(r["t"] for r in rows)
+    first = first_log = min(r["t"] for r in rows)
+    est, est_skip = precache.load(rows, prices, model_key)
+    if est:
+        first = min(first, dt.datetime.fromisoformat(est["first"]).astimezone())
 
     frames = {}
     tabs = TABS if a.timeframe.lower() in TABS else [a.timeframe.lower()] + TABS
     for tf in tabs:
         d, lab = parse_frame(tf)
-        frames[tf] = summarise(rows, prices, d, lab, now, first)
+        frames[tf] = summarise(rows, prices, d, lab, now, first, est)
     cur = frames[a.timeframe.lower()]
 
-    seen_keys = {model_key(r["model"]) for r in rows}
+    seen_keys = {model_key(r["model"]) for r in rows} | set(est["totals"] if est else ())
     data = {
         "frames": frames, "order": list(frames), "current": a.timeframe.lower(),
-        "first": first.astimezone().date().isoformat(), "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "first": first.astimezone().date().isoformat(), "first_log": first_log.astimezone().date().isoformat(),
+        "est_skip": est_skip, "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "prices": {"fetched": prices["fetched"], "stale": prices.get("stale", False), "url": PRICING_URL,
                    "models": {k: v for k, v in prices["models"].items() if k in seen_keys},
                    "fast": {k: v for k, v in prices["fast"].items() if k in seen_keys},
@@ -279,6 +298,16 @@ def main():
     if cur["unpriced"]:
         lines.append("Unpriced (no list price found, left out): "
                      + ", ".join(f"{m} ({n} replies)" for m, n in cur["unpriced"].items()))
+    if cur["est"]:
+        e = cur["est"]
+        lines.append(f"Includes an estimate of {money(e['cost'])} for {e['from']} to {e['to']} from /stats' running "
+                     f"totals (session logs for those days are deleted): its token counts divided by {e['ratio']}, "
+                     "its overcount measured on days both exist; cache writes at the 5-minute rate, so a lower bound.")
+        if e["unpriced"]:
+            lines.append("Unpriced in the estimate (no list price found, left out): "
+                         + ", ".join(f"{m} ({n:,} tokens)" for m, n in e["unpriced"].items()))
+    elif est_skip:
+        lines.append(f"No estimate for days whose session logs Claude Code may have deleted: {est_skip}.")
     lines.append(f"Card: {card}")
     print("\n".join(lines))
     if a.open:

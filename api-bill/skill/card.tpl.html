@@ -1,3 +1,6 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>API Shadow Bill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;600&family=Source+Sans+3:wght@400;600&display=swap">
@@ -48,6 +51,8 @@ h2{font:700 15px var(--display);margin:0 0 10px}
 .rates th:first-child,.rates td:first-child{text-align:left}
 .rates th{font-weight:600;color:var(--muted)}
 .tablewrap{overflow-x:auto}
+.info{font-size:13px;line-height:1.5;padding:10px 12px;border-radius:8px;border:1px solid var(--rule);color:var(--muted)}
+.only{font:400 12px var(--body);color:var(--muted)}
 </style>
 
 <main class="card" aria-live="polite">
@@ -60,6 +65,7 @@ h2{font:700 15px var(--display);margin:0 0 10px}
     <div class="big" id="big">$0</div>
     <div class="sub" id="sub"></div>
   </section>
+  <div class="info" id="est" hidden></div>
   <div class="warn" id="stale" hidden></div>
   <div class="warn" id="unpriced" hidden></div>
   <section>
@@ -71,11 +77,11 @@ h2{font:700 15px var(--display);margin:0 0 10px}
     <div class="bars" id="models"></div>
   </section>
   <section>
-    <h2>Top projects</h2>
+    <h2>Top projects <span class="only" id="projonly"></span></h2>
     <div class="bars" id="projects"></div>
   </section>
   <section class="spark" id="sparkwrap">
-    <h2>Per day</h2>
+    <h2>Per day <span class="only" id="dayonly"></span></h2>
     <div id="spark"></div>
   </section>
   <section>
@@ -111,18 +117,22 @@ function render(){
   for(const b of $('tabs').children)b.setAttribute('aria-pressed',String(b.dataset.k===cur));
   $('big').textContent=money(d.cost);
   const t=d.tokens;
-  $('sub').textContent=d.label+' (since '+fmtDate(d.since)+') · '+d.sessions+' sessions · '+(t.msgs||0).toLocaleString('en-US')+' replies';
+  $('sub').textContent=d.label+' (since '+fmtDate(d.since)+') · '+d.sessions+' sessions · '+(t.msgs||0).toLocaleString('en-US')+' replies'+(d.est?' logged':'');
+  const e=d.est,ex=$('est');ex.hidden=!e;
+  ex.textContent=e?'Includes about '+money(e.cost)+' and '+e.sessions+' sessions for '+fmtDate(e.from)+' to '+fmtDate(e.to)+', an estimate from the running totals /stats keeps: Claude Code has deleted the session logs for those days. /stats counts each reply once per log line, so its token counts run about '+e.ratio+'× high (measured on the days both exist) and are divided by that. Its cache writes have no 5-minute/1-hour split, so they are priced at the 5-minute rate, which makes this part a lower bound.':'';
+  const only=e?'(logged days only, from '+fmtDate(D.first_log)+')':'';$('projonly').textContent=only;$('dayonly').textContent=only;
   const r=$('receipt');r.replaceChildren();
   const rows=[['Cache reads',tok(t.read||0)+' tok',d.split.rd],['Cache writes',tok(t.write||0)+' tok',d.split.wr],['Output',tok(t.output||0)+' tok',d.split.out],['Fresh input',tok(t.input||0)+' tok',d.split.in]];
   if(d.split.search)rows.push(['Web searches',d.searches+' searches',d.split.search]);
   for(const [n,tk,c] of rows){const l=el('div','line');l.append(el('span',null,n),el('span','t',tk),el('span',null,money(c)));r.append(l)}
+  if(d.est){const l=el('div','line');l.append(el('span',null,'of which estimated, to '+fmtDate(d.est.to)),el('span','t',''),el('span',null,money(d.est.cost)));r.append(l)}
   const tl=el('div','line total');tl.append(el('span',null,'API total'),el('span','t',''),el('span',null,money(d.cost)));r.append(tl);
   bars('models',d.models,k=>d.model_names[k]||k);
   bars('projects',d.projects,k=>k);
   const sw=$('sparkwrap');sw.hidden=d.daily.length<3;
   if(!sw.hidden)spark(d.daily);
-  const up=Object.entries(d.unpriced);const u=$('unpriced');u.hidden=!up.length;
-  u.textContent=up.length?'Left out, no list price found: '+up.map(([m,n])=>m+' ('+n+' replies)').join(', ')+'. The total is lower than the true figure by their cost.':'';
+  const up=Object.entries(d.unpriced).map(([m,n])=>m+' ('+n+' replies)').concat(Object.entries(d.est?d.est.unpriced:{}).map(([m,n])=>m+' ('+tok(n)+' tokens, estimated)'));const u=$('unpriced');u.hidden=!up.length;
+  u.textContent=up.length?'Left out, no list price found: '+up.join(', ')+'. The total is lower than the true figure by their cost.':'';
 }
 function spark(days){
   const W=520,H=110,P=24,n=days.length,max=Math.max(...days.map(x=>x[1]));
@@ -146,6 +156,6 @@ for(const k of D.order){const b=document.createElement('button');b.type='button'
 $('eyebrow').textContent='Claude Code on this PC · made '+D.generated;
 const pr=D.prices;
 if(pr.stale){$('stale').hidden=false;$('stale').textContent='The live pricing page could not be reached, so these are the prices last fetched on '+fmtDate(pr.fetched)+'.'}
-$('note').textContent='Every reply in this PC\'s Claude Code session logs (first one '+fmtDate(D.first)+'), subagents included, priced at the list API rate of the model that wrote it, as published on Anthropic\'s pricing page (fetched '+fmtDate(pr.fetched)+(pr.stale?', not live':'')+'). Standard rates: no batch discount, no data residency premium; fast-mode replies at fast-mode rates.'+(pr.web_search_per_1k?' Web searches at $'+pr.web_search_per_1k+' per 1,000.':'')+' Only this PC\'s logs count, so the true figure is at least this.';
+$('note').textContent='Every reply in this PC\'s Claude Code session logs (first one '+fmtDate(D.first_log)+'), subagents included, priced at the list API rate of the model that wrote it, as published on Anthropic\'s pricing page (fetched '+fmtDate(pr.fetched)+(pr.stale?', not live':'')+'). Standard rates: no batch discount, no data residency premium; fast-mode replies at fast-mode rates.'+(pr.web_search_per_1k?' Web searches at $'+pr.web_search_per_1k+' per 1,000.':'')+(D.first<D.first_log?' Earlier days, whose logs Claude Code has deleted, are estimated from /stats\' running totals (see above).':'')+(D.est_skip?' Days whose logs Claude Code may have deleted are not counted: '+D.est_skip+'.':'')+' Only this PC counts, so the true figure is at least this.';
 rates();render();
 </script>
