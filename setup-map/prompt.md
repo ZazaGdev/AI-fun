@@ -1,104 +1,53 @@
 # Setup map prompt
 
-The same result as the `setup-map` skill, without installing anything. Copy the block
-below (the copy button is at its top right) and paste it into Claude Code, from any
-folder. It maps your global setup and every project Claude Code has worked in. To add
-projects Claude Code has never been opened in, name their folder on the first line.
+The same result as the `setup-map` skill, without installing it. Copy the block below
+(the copy button is at its top right) and paste it into Claude Code, from any folder.
+
+It downloads the skill's two fixed files from this repo and runs them, so the page is
+exactly the one the skill makes, with your own setup in it. Claude asks you before it
+downloads or runs anything. To add projects Claude Code has never been opened in, name
+their folder on the first line.
 
 ## ⬇️ COPY FROM HERE
 
 ```text
 Extra projects folder: none
 
-Draw my whole Claude Code setup as one interactive 3D web page: my global setup, and
-every project Claude Code has worked in on this computer, wherever I run this from.
-Projects come from Claude Code's own records: the session folders under
-`~/.claude/projects/` and the `projects` list in `~/.claude.json`. Use only Python's standard
-library to read the setup, in one script you write to a temporary folder. Read names,
-kinds, the one-line `description` from each file's frontmatter, and counts only. Never
-copy settings values, env, commands, URLs or file bodies into the page. Do not send
-anything anywhere.
+Draw my Claude Code setup map with the setup-map tool from the public repo
+github.com/ZazaGdev/AI-fun. Do not write the page or the script yourself: use the
+repo's fixed files, so the result is exactly the same as the setup-map skill's.
 
-1. **Global setup** (from `~/.claude`, on Windows `%USERPROFILE%\.claude`):
-   - Skills: `skills/*/SKILL.md`, name and description from the frontmatter.
-   - Agents: `agents/*.md`. Commands: `commands/*.md`, shown as `/name`.
-   - Output styles: `output-styles/*.md`; mark the one named by `outputStyle` in
-     `settings.json` as active.
-   - Rules: `CLAUDE.md`, each file it imports with a line starting `@`, and `rules/*.md`.
-   - Memory: one node per project that has a `projects/<slug>/memory/` folder with
-     `*.md` files in it (not counting `MEMORY.md`), named after that project (the one
-     its sessions' `cwd` belongs to, from step 2), with the count of distinct file
-     names. Several folders belonging to the same project make one node. Skip folders
-     with no memory files. Never read the memory files themselves.
-   - Plugins: the enabled ones in `enabledPlugins` of `settings.json`, read at their
-     `installPath` in `plugins/installed_plugins.json`: description from
-     `.claude-plugin/plugin.json`, and the names of their skills, agents and commands.
-   - MCP servers: `mcpServers` keys in `~/.claude.json` (user scope) and under each
-     entry of its `projects` (local scope), each project's `.mcp.json`, and each
-     enabled plugin's `.mcp.json`. Names only.
-   - Hooks: from `settings.json`, each plugin's `hooks/hooks.json` and each project's
-     `.claude/settings.json`. Show the script file name the command runs (or "inline
-     <event> hook") and the event. Never show the command itself.
-   - Model: `model` in `settings.json`.
+1. Before downloading anything, tell me what you will fetch and from where, and ask me
+   to confirm. The two files are:
+   - https://raw.githubusercontent.com/ZazaGdev/AI-fun/main/setup-map/skill/scripts/setup_map.py
+     (the Python script: reads my setup, writes one HTML file)
+   - https://raw.githubusercontent.com/ZazaGdev/AI-fun/main/setup-map/skill/map.tpl.html
+     (the page template the script fills in)
+   Say that the script reads ~/.claude, ~/.claude.json and my projects' own .claude
+   folders, takes names, short descriptions and counts only, reads only the working
+   folder path and file dates from session files (never what was said), sends nothing
+   anywhere, and writes ~/setup-map/setup-map.html. Offer to show me the script before
+   running it.
 
-2. **Projects:** every folder Claude Code has worked in.
-   - Each folder under `~/.claude/projects/` holds the session files (`*.jsonl`) of
-     one working folder. Take that folder's real path from the `cwd` field of the first
-     lines of a session file; do not decode the folder name. Count the session files,
-     and take the newest file's modified time as the date it was last used. Read only
-     `cwd` and file times, never anything that was said in a session.
-   - Add every key of the `projects` list in `~/.claude.json`, and, if an extra
-     projects folder is named above, its subfolders three levels deep that have
-     `.git`, `.claude`, `CLAUDE.md` or `.mcp.json`.
-   - Treat paths that resolve to the same folder as one. Skip folders that no longer
-     exist, the home folder, drive roots, `~/.claude`, anything in the system temp
-     folder, and git worktrees (a `.git` file instead of a `.git` folder).
-   - A folder inside another project's git repo is part of that project, and its
-     sessions count for it, unless it has its own `.claude` folder: then it is a
-     project of its own named `parent/sub`, for example `my-app/server`. A folder
-     that only holds projects and is not a git repo does not swallow them.
-   For each project, its sessions, last-used date and its own setup: `.claude/agents/**/*.md` (with a `name` in frontmatter),
-   `.claude/skills/*/SKILL.md`, `.claude/commands/**/*.md`, hooks in
-   `.claude/settings.json` and `.claude/settings.local.json`, MCP servers from its
-   `.mcp.json` and its `~/.claude.json` entry, `CLAUDE.md`, `.claude/CLAUDE.md` and
-   `.claude/rules/*.md`.
+2. Once I confirm, download both files with Python's standard library (urllib), not by
+   retyping them, into `~/setup-map/tool/`, keeping this layout:
+   - `~/setup-map/tool/scripts/setup_map.py`
+   - `~/setup-map/tool/map.tpl.html`
+   Save them byte for byte. Do not edit either file.
 
-3. **Page.** Write one self-contained file, `~/setup-map/setup-map.html`, with the data
-   above embedded as JSON, then open it in my browser and give me the path. Start it
-   with `<!doctype html>`, `<meta charset="utf-8">` and a viewport meta tag. Load
-   three.js 0.160.0 from `https://cdn.jsdelivr.net/npm/three@0.160.0/` through an
-   import map, with OrbitControls, CSS2DRenderer and UnrealBloomPass. Build all text
-   with DOM calls (`textContent`), never `innerHTML`, so a name cannot inject markup.
-   - Look: near-black space with a faint starfield, soft bloom, slow auto-rotation.
-     A glowing coral core labelled "Claude Code" in the middle.
-   - The page opens on the Global view, and that view must show the global setup
-     from step 1, never only projects.
-   - Global view: one glowing hub per kind (skills, plugins, agents, MCP servers,
-     hooks, commands, output styles, rules, memory), each in its own neon colour,
-     spread evenly around the core and joined to it by a faint curved line. Each item
-     is a small node in a loose cloud past its hub, joined to it by a fainter line.
-     Label each hub with its kind and count.
-   - By project view: every project around the core on a wider shell. A project's
-     node grows with its number of sessions and glows brighter the more recently it was
-     used. Projects used in the last 60 days sit closer; the rest sit further out,
-     faded, but still shown. Under each name: "used today", "used 3 days ago", "idle
-     90 days" or "no recent sessions". Around each project, one small circle per kind
-     of its own setup, in that kind's colour, with its count under it ("2 agents").
-   - Links stay quiet until you point at something: hovering or clicking a node lights
-     its path to the core. One faint dot drifts slowly along each link.
-   - HUD: title and "N pieces, model, style" at top left; a Global / By project toggle
-     and a search box at the top; a row of chips at the bottom, one per kind with its
-     count. Clicking a chip or node flies the camera there and opens a side panel
-     listing the items with their descriptions. A "where this was read from" link
-     lists the folders each kind was read from. Hover shows a small tooltip. Drag to
-     orbit, scroll to zoom, H hides the HUD, Escape closes the panel.
-   - Search finds projects, skills, agents, hooks and the rest, flies to the match and
-     opens its panel.
-   - It must work when opened by double-clicking the file.
+3. If either download fails, stop. Tell me which URL failed and the error, and that I
+   can install the skill instead by copying the repo's `setup-map/skill` folder to
+   `~/.claude/skills/setup-map`. Do not write your own version of the page or script.
 
-4. **Tell me:** the page path, the count of each kind, how many projects there are,
-   how many were used in the last 60 days, how many have a setup of their own, and
-   anything you could not read.
+4. Run it with Python 3:
+   `python ~/setup-map/tool/scripts/setup_map.py --open`
+   If an extra projects folder is named above, pass it first:
+   `python ~/setup-map/tool/scripts/setup_map.py "<folder>" --open`
+   On Windows use `%USERPROFILE%` in place of `~` if needed, and `python3` on macOS or
+   Linux if `python` is not found.
+
+5. Tell me the page path and the lines the script printed: the counts of each kind,
+   how many projects have a setup of their own, and anything not shown.
 
 The page shows my project, skill and memory folder names, so never publish or upload
 it unless I ask.

@@ -15,10 +15,12 @@ The screenshots come from a made-up sample setup, not a real one.
 
 Two ways to use it:
 
-- [`skill/`](skill/): an installable Claude Code skill. Runs fixed, tested code and
-  gives the same page every time.
+- [`skill/`](skill/): an installable Claude Code skill.
 - [`prompt.md`](prompt.md): a single prompt you paste into Claude Code, no install.
-  Claude writes the code fresh each time, so the page's look can vary.
+  It downloads the skill's two files from this repo and runs them.
+
+Both run the same fixed script and page template, so both give exactly the same page,
+with your own setup in it.
 
 ## What it touches
 
@@ -32,9 +34,12 @@ Two ways to use it:
 - Takes only names, short descriptions (the `description` line at the top of a skill
   or agent file) and counts. It never copies settings values, environment variables,
   hook commands, URLs or the contents of your memory files.
-- Writes one local HTML file, `~/setup-map/setup-map.html`. Nothing else is written.
-- Sends nothing anywhere. When you open the page, it loads three.js from jsDelivr and
-  its fonts from Google Fonts; your setup stays inside the file.
+- Writes one local HTML file, `~/setup-map/setup-map.html`. The prompt also saves the
+  two files it downloads in `~/setup-map/tool/`. Nothing else is written.
+- Sends nothing anywhere. The prompt downloads two files from
+  raw.githubusercontent.com, after asking you. When you open the page, it loads
+  three.js from jsDelivr and its fonts from Google Fonts; your setup stays inside the
+  file.
 
 The page shows your project and skill names, so think before you share it.
 
@@ -91,4 +96,7 @@ switch between Global and By project at the top, and press H to hide the overlay
 ## Or just paste the prompt
 
 Open [`prompt.md`](prompt.md), copy everything between the two markers into Claude
-Code, from any folder. It reads the same things and writes the same kind of page.
+Code, from any folder. Claude says what it will download and from where, and asks
+before it downloads and runs the skill's script and page template from this repo. If
+the download fails, it stops and tells you, rather than making a page of its own. The
+page is the same one the skill makes. Python 3 is the only requirement.

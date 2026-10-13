@@ -641,35 +641,33 @@ globalKinds.forEach((k, i) => {
 });
 
 // ---- By project view: projects around the core, each labelled with what it has ----
-// Projects used in the last 60 days sit on an inner shell; the rest sit further out, faded.
-// A node grows with how many sessions it has had and glows brighter the more recently it was used.
-const withOwn = projects.filter(p => p.own);
+// Projects with a setup of their own sit on an inner shell; the rest sit further out, dimmed.
+// A project not used for 60 days or more is dimmed the same way and says how long it has been idle.
+const withOwn = projects.filter(p => p.own), without = projects.filter(p => !p.own);
 const STALE = 60;
 const ageDays = p => p.last ? Math.max(0, Math.floor((Date.now() - new Date(p.last + 'T00:00:00')) / 864e5)) : null;
 const isStale = p => ageDays(p) == null || ageDays(p) >= STALE;
 const ageText = p => { const a = ageDays(p); return a == null ? 'no recent sessions' : a === 0 ? 'used today' : a === 1 ? 'used yesterday' : a < STALE ? `used ${a} days ago` : `idle ${a} days`; };
-const recency = p => { const a = ageDays(p); return a == null ? 0.35 : a <= 7 ? 1 : Math.max(0.45, 1 - (a - 7) / (STALE - 7) * 0.55); };
 const sessionsText = p => `${p.sessions || 0} session${p.sessions === 1 ? '' : 's'}`;
-const active = projects.filter(p => !isStale(p)), idle = projects.filter(isStale);
 const ownCount = p => Object.values(p.own || {}).reduce((n, l) => n + l.length, 0);
 const COUNT_ORDER = ['agents', 'skills', 'hooks', 'commands', 'mcp', 'rules'];
 const COUNT_WORD = { agents: 'agent', skills: 'skill', hooks: 'hook', commands: 'command', mcp: 'MCP', rules: 'rule' };
 const SHOW_ZEROS = false;
 const countParts = item => COUNT_ORDER.map(key => [key, (item.own?.[key] || []).length]).filter(([, n]) => SHOW_ZEROS || n)
   .map(([key, n]) => ({ key, n, text: `${n} ${COUNT_WORD[key]}${n === 1 || key === 'mcp' ? '' : 's'}` }));
-// the counts sit under the kind circles, so the project label is its name and when it was last used
+// the counts now sit under the kind circles, so the project label is just its name
 function projectLabel(item, color) {
-  return new CSS2DObject(el('div', { class: 'label3d plabel', style: { '--c': color } }, item.name, el('small', {}, ageText(item))));
+  const sub = [item.own ? null : 'no own setup', isStale(item) ? ageText(item) : null].filter(Boolean).join(' · ');
+  return new CSS2DObject(el('div', { class: 'label3d plabel', style: { '--c': color } }, item.name, sub ? el('small', {}, sub) : null));
 }
-[[active, 56], [idle, 84]].forEach(([list, R]) => list.forEach((item, i) => {
+[[withOwn, 56], [without, 84]].forEach(([list, R]) => list.forEach((item, i) => {
   const dir = fib(i, list.length);
   dir.y *= 1.35; // taller shell than the global one, so labels stack less
   const pos = dir.normalize().clone().multiplyScalar(R);
   const outside = !!item.outside;
-  const color = new THREE.Color(outside ? '#8fa6ff' : PROJECTS_KIND.color).lerp(new THREE.Color('#ffffff'), 0.25)
-    .multiplyScalar(0.4 + 0.6 * recency(item));
-  const size = 0.42 + Math.min(0.45, Math.log10(1 + (item.sessions || 0)) * 0.22) + Math.min(0.25, Math.sqrt(ownCount(item)) * 0.06);
-  const n = hubNode('project', PROJECTS_KIND, pos, color, size, item.name, '', { item, dimmed: isStale(item) });
+  const color = new THREE.Color(outside ? '#8fa6ff' : PROJECTS_KIND.color).lerp(new THREE.Color('#ffffff'), 0.25);
+  const n = hubNode('project', PROJECTS_KIND, pos, color, item.own ? 0.7 + Math.sqrt(ownCount(item)) * 0.12 : 0.42,
+    item.name, '', { item, dimmed: !item.own || isStale(item) });
   // swap the plain label for one carrying the counts
   const plain = n.children.find(c => c.isCSS2DObject);
   const lbl = projectLabel(item, '#' + color.getHexString());
@@ -769,7 +767,7 @@ picker(stage, () => pickables.filter(m => m.visible && m.userData.view === view)
     selected = h;
     controls.autoRotate = false;
     if (h.userData.view === 'project') openProject(h.userData.projectItem || h.userData.item);
-    flyTo(stage, h.getWorldPosition(new THREE.Vector3()), h.userData.isHub && view === 'global' ? 38 : 26, 1500);
+    flyTo(stage, h.getWorldPosition(new THREE.Vector3()), h.userData.isHub ? (view === 'global' ? 38 : 34) : 26, 1500);
   },
 });
 ui.onChip = k => {
@@ -832,7 +830,7 @@ function go(h) {
   selected = h.node;
   ui.hideTip();
   h.open();
-  flyTo(stage, h.node.getWorldPosition(new THREE.Vector3()), h.node.userData.isHub && target === 'global' ? 38 : 26, 1500);
+  flyTo(stage, h.node.getWorldPosition(new THREE.Vector3()), h.node.userData.isHub ? (target === 'global' ? 38 : 34) : 26, 1500);
 }
 input.addEventListener('input', showHits);
 input.addEventListener('focus', showHits);
@@ -886,7 +884,6 @@ renderer.setAnimationLoop(() => {
     if (l.view === 'project' && hub !== hovered && hub !== selected) {
       D.copy(hub.position).applyMatrix4(camera.matrixWorldInverse);
       depth = THREE.MathUtils.clamp(0.25 + 0.75 * (D.z - camZ + 30) / 45, 0.25, 1);
-      if (u.dimmed && !l.near) depth *= 0.55; // a project idle for a long time fades back with its node
     }
     // count labels under the kind circles come in as the camera nears them, so the overview stays readable
     // count labels show on the near half of the sphere at full strength and fade out behind the core,
