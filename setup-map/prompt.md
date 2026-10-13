@@ -3,6 +3,9 @@
 Two ways to get the setup map without installing the skill. Most people should use
 Option 1. Both give exactly the same page as the skill, with your own setup in it.
 
+Jump to: [Option 1: paste and go](#option-1-paste-and-go-nothing-to-download) ·
+[Option 2: use the scripts from this repo](#option-2-use-the-scripts-from-this-repo)
+
 ## Option 1: paste and go (nothing to download)
 
 Copy the whole block below (the copy button is at its top right) and paste it into
@@ -1389,6 +1392,8 @@ renderer.setAnimationLoop(() => {
 </html>
 ----- END FILE 2 -----
 `````
+
+[Back to top](#setup-map-prompt)
 
 ## Option 2: use the scripts from this repo
 
