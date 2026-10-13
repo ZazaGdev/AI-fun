@@ -1,13 +1,19 @@
 # AI-fun
 
-Small side projects for working with AI tools: Claude Code skills, prompts, scripts
-and experiments. Each project has its own folder and its own README.
+Small, free tools for people who use [Claude Code](https://docs.claude.com/en/docs/claude-code)
+every day. Each one looks at something already on your own machine, such as your
+session logs or your setup, and shows it back to you in a form you can read at a
+glance. Every project comes two ways: a Claude Code skill you install once, and a
+single prompt you paste into Claude Code without installing anything. They run
+locally, use only Python's standard library, and keep your data on your machine.
+Each project has its own folder and its own README.
 
 ## Projects
 
 | Project | What it is |
 | --- | --- |
-| [api-bill](api-bill/) | What your Claude Code sessions would cost on the API. A skill and a paste-in prompt. |
+| [api-bill](api-bill/) | What your Claude Code sessions would cost on the API at list prices, as a cost card with the split by model, project and day. A skill and a paste-in prompt. |
+| [setup-map](setup-map/) | Your whole Claude Code setup as an interactive 3D map: skills, plugins, agents, MCP servers, hooks, rules and memory, plus which projects have a setup of their own. A skill and a paste-in prompt. |
 
 ## Adding a project
 
