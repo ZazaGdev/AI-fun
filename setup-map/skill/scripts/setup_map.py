@@ -1,5 +1,5 @@
-"""Draw your Claude Code setup as one 3D page: read ~/.claude and a projects folder,
-then write setup-map.html with the setup's shape baked in.
+"""Draw your Claude Code setup as one 3D page: read ~/.claude and every project Claude
+Code has been opened in, then write setup-map.html with the setup's shape baked in.
 
 Reads names, kinds, one-line frontmatter descriptions and counts only. Never copies
 settings values, env, commands, URLs or file contents beyond a frontmatter description.
@@ -8,8 +8,12 @@ Sends nothing anywhere. Writes one HTML file.
 Usage:
   python setup_map.py [PROJECTS_DIR] [--out FILE] [--open] [--projects-json FILE]
 
-PROJECTS_DIR  folder to look for projects in, and its subfolders (3 levels deep).
-              Default: the current folder.
+Projects are every folder listed in ~/.claude.json (where Claude Code was opened),
+skipping folders that are gone and git worktrees. A folder inside another project is
+part of it, unless it has a .claude folder of its own.
+
+PROJECTS_DIR  optional: a folder to look for more projects in, and its subfolders
+              (3 levels deep).
 --out         where to write the page. Default: ~/setup-map/setup-map.html
 --open        open the page in the default browser afterwards.
 --projects-json  a JSON file listing more projects, read if it is there:
@@ -17,11 +21,13 @@ PROJECTS_DIR  folder to look for projects in, and its subfolders (3 levels deep)
                  Every folder in a scan root counts as a project.
 """
 import argparse
+import datetime
 import glob
 import json
 import os
 import re
 import sys
+import tempfile
 import webbrowser
 from pathlib import Path
 
@@ -119,23 +125,74 @@ def looks_like_project(path):
     return any(os.path.exists(os.path.join(path, m)) for m in (".git", ".claude", "CLAUDE.md", ".mcp.json"))
 
 
-def find_projects(root, projects_json):
-    projects, seen = [], {real(CLAUDE), real(HOME)}
+def nested_name(parent, path):
+    """A project inside another project, named by where it sits in it."""
+    rel = os.path.relpath(os.path.realpath(path), os.path.realpath(parent["path"]))
+    return parent["name"] + "/" + rel.replace(os.sep, "/")
+
+
+def read_history():
+    """One entry per folder under ~/.claude/projects: the working folder its sessions ran in,
+    how many sessions there are and when the newest one was last written. Takes only the
+    `cwd` field of a session's first lines and file times; never reads what was said."""
+    out = []
+    for d in sorted(glob.glob(os.path.join(CLAUDE, "projects", "*"))):
+        files = glob.glob(os.path.join(d, "*.jsonl"))
+        if not files:
+            continue
+        cwd = None
+        for f in sorted(files, key=os.path.getmtime, reverse=True):
+            try:
+                with open(f, encoding="utf-8", errors="replace") as fh:
+                    for _, line in zip(range(40), fh):
+                        try:
+                            cwd = json.loads(line).get("cwd")
+                        except (ValueError, AttributeError):
+                            continue
+                        if cwd:
+                            break
+            except OSError:
+                continue
+            if cwd:
+                break
+        out.append({"slug": os.path.basename(d), "cwd": cwd, "sessions": len(files),
+                    "last": max(os.path.getmtime(f) for f in files)})
+    return out
+
+
+def find_projects(root, projects_json, user_json, history):
+    """Every folder Claude Code has worked in (its session history and the projects list in
+    ~/.claude.json), plus a folder the user passes and its subfolders, plus an optional
+    projects list. Returns the projects and a function giving the project a path belongs to."""
+    found, seen = [], set()
+    skip = {real(HOME), real(CLAUDE)}
+    temp = real(tempfile.gettempdir())
 
     def add(path, name=None):
-        if real(path) not in seen and os.path.isdir(path):
-            seen.add(real(path))
-            projects.append({"name": name or os.path.basename(os.path.abspath(path).rstrip("\\/")) or path, "path": path})
+        if not path or not os.path.isdir(path):
+            return
+        r = real(path)
+        if r in seen or r in skip or os.path.dirname(r) == r or r.startswith((real(CLAUDE) + "/", temp + "/")):
+            return  # the home folder, a drive root, ~/.claude and throwaway temp folders are not projects
+        if os.path.isfile(os.path.join(path, ".git")):
+            return  # a git worktree: a second checkout of a project already on the map
+        seen.add(r)
+        found.append({"name": name or os.path.basename(os.path.abspath(path).rstrip("\\/")) or path, "path": path, "real": r})
 
-    if looks_like_project(root):
+    for h in history:
+        add(h["cwd"])
+    for path in user_json.get("projects") or {}:
+        add(path)
+    sources["projects"] = ("every folder Claude Code has worked in: the working folder of the sessions under "
+                           "~/.claude/projects (paths and file times only) and the projects list in ~/.claude.json")
+    if root:
         add(root)
-    for top, dirs, _ in os.walk(root):
-        depth = os.path.relpath(top, root).count(os.sep) + (top != root)
-        dirs[:] = sorted((d for d in dirs if d.lower() not in SKIP and not d.startswith(".")), key=str.lower) if depth < DEPTH else []
-        if top != root and looks_like_project(top):
-            add(top)
-    sources["projects"] = f"folders under {root} ({DEPTH} levels deep) with a .git, .claude, CLAUDE.md or .mcp.json"
-
+        for top, dirs, _ in os.walk(root):
+            depth = os.path.relpath(top, root).count(os.sep) + (top != root)
+            dirs[:] = sorted((d for d in dirs if d.lower() not in SKIP and not d.startswith(".")), key=str.lower) if depth < DEPTH else []
+            if top != root and looks_like_project(top):
+                add(top)
+        sources["projects"] += f"; plus folders under {root} ({DEPTH} levels deep) with a .git, .claude, CLAUDE.md or .mcp.json"
     if projects_json:
         cfg = load_json(projects_json, "projects list")
         if cfg:
@@ -149,8 +206,34 @@ def find_projects(root, projects_json):
             for p in cfg.get("projects", []):
                 add(p.get("path", ""), p.get("name"))
             sources["projects"] += f"; plus the projects listed in {projects_json}"
+
+    # a folder inside another project's git repo is part of it, unless it has a setup of its own;
+    # a plain folder that only holds projects (no .git) does not swallow them, nor does a repo hold another repo
+    found.sort(key=lambda p: len(p["real"]))
+    projects = []
+    is_repo = lambda p: os.path.isdir(os.path.join(p["path"], ".git"))
+    for p in found:
+        parent = None if is_repo(p) else next(
+            (q for q in reversed(projects) if is_repo(q) and p["real"].startswith(q["real"] + "/")), None)
+        if parent and not os.path.isdir(os.path.join(p["path"], ".claude")):
+            continue
+        if parent:
+            p["name"] = nested_name(parent, p["path"])
+        projects.append(p)
+
+    def owner(path):
+        r = real(path) if path else ""
+        return next((q for q in sorted(projects, key=lambda q: -len(q["real"]))
+                     if r == q["real"] or r.startswith(q["real"] + "/")), None)
+
+    # activity: sessions and last use, a worktree's or subfolder's counting for its project
+    for h in history:
+        q = owner(h["cwd"])
+        if q:
+            q["sessions"] = q.get("sessions", 0) + h["sessions"]
+            q["lastTs"] = max(q.get("lastTs", 0), h["last"])
     projects.sort(key=lambda p: p["name"].lower())
-    return projects
+    return projects, owner
 
 
 def own_setup(path, name, user_json):
@@ -184,10 +267,11 @@ def own_setup(path, name, user_json):
     return {k: v for k, v in own.items() if v}
 
 
-def collect(root, projects_json=None):
+def collect(root=None, projects_json=None):
     settings = load_json(os.path.join(CLAUDE, "settings.json"), "~/.claude/settings.json")
     user_json = load_json(os.path.join(HOME, ".claude.json"), "~/.claude.json")
-    projects = find_projects(root, projects_json)
+    history = read_history()
+    projects, owner = find_projects(root, projects_json, user_json, history)
 
     # ---- skills, agents, commands, output styles ----
     skills = []
@@ -218,6 +302,7 @@ def collect(root, projects_json=None):
 
     # ---- memory: one node per project memory folder, with its file count ----
     by_slug = {slug(p["path"]): p["name"] for p in projects}
+    by_slug.update({h["slug"]: owner(h["cwd"])["name"] for h in history if owner(h["cwd"])})
     home_slug = slug(HOME) + "-"
     memory = {}
     for d in sorted(glob.glob(os.path.join(CLAUDE, "projects", "*", "memory"))):
@@ -290,9 +375,13 @@ def collect(root, projects_json=None):
 
     for p in projects:
         p["desc"] = "Project"
+        p["sessions"] = p.get("sessions", 0)
+        if p.get("lastTs"):
+            p["last"] = datetime.date.fromtimestamp(p["lastTs"]).isoformat()
         if not p["own"]:
             del p["own"]
-        del p["path"]
+        for k in ("path", "real", "lastTs"):
+            p.pop(k, None)
 
     return {
         "title": "Claude Code",
@@ -316,13 +405,13 @@ def render(data, out):
 
 def main():
     ap = argparse.ArgumentParser(description="Draw your Claude Code setup as one 3D HTML page.")
-    ap.add_argument("projects", nargs="?", default=os.getcwd(), help="folder to look for projects in (default: current folder)")
+    ap.add_argument("projects", nargs="?", help="a folder to look for more projects in, with its subfolders")
     ap.add_argument("--out", default=os.path.join(HOME, "setup-map", "setup-map.html"))
     ap.add_argument("--open", action="store_true", help="open the page afterwards")
     ap.add_argument("--projects-json", help="JSON file listing more projects; read if present")
     a = ap.parse_args()
-    root = os.path.abspath(os.path.expanduser(a.projects))
-    if not os.path.isdir(root):
+    root = a.projects and os.path.abspath(os.path.expanduser(a.projects))
+    if root and not os.path.isdir(root):
         sys.exit(f"Not a folder: {root}")
     if not os.path.isdir(CLAUDE):
         sys.exit(f"No Claude Code setup found at {CLAUDE}")
