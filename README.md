@@ -14,6 +14,7 @@ Each project has its own folder and its own README.
 | --- | --- |
 | [api-bill](api-bill/) | What your Claude Code sessions would cost on the API at list prices, as a cost card with the split by model, project and day. A skill and a paste-in prompt. |
 | [setup-map](setup-map/) | Your whole Claude Code setup as an interactive 3D map: skills, plugins, agents, MCP servers, hooks, rules and memory, plus which projects have a setup of their own. A skill and a paste-in prompt. |
+| [disk-cleanup](disk-cleanup/) | What could be cleaned up on a Windows drive or folder, grouped by kind with sizes and how safe each group is. It removes nothing unless you ask, and then only to the Recycle Bin. A skill and a paste-in prompt. |
 
 ## Adding a project
 
