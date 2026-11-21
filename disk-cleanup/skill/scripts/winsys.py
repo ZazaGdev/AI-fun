@@ -195,8 +195,11 @@ def sync_roots(reg=None):
 
 def odd_name(path):
     """True for a path that Windows tools may read as another one: a \\\\?\\ or \\\\.\\ prefix, a /, a
-    . or .. part, a part ending in a space or a dot, or anything os.path.abspath would change."""
+    . or .. part, a part ending in a space or a dot, a : after the drive (a file's stream), or
+    anything os.path.abspath would change."""
     if not path or "\0" in path or path.startswith(("\\\\?\\", "\\\\.\\")) or "/" in path:
+        return True
+    if ":" in os.path.splitdrive(path)[1]:
         return True
     if os.path.abspath(path) != path:
         return True

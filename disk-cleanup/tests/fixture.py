@@ -257,6 +257,7 @@ class PC:
         d(u + "Documents\\new-empty", age=1)
         d(u + "Documents\\made-today", born_today=True)
         f(u + "Documents\\locked\\secret.txt")
+        f(u + "Documents\\locked\\sub\\clip.mp4", 300 * KB)  # behind the deny rule: never read by the scan
         d(u + "Music")
         f(u + "Desktop\\notes.txt")
         for env_dir, age in (("old-env", OLD), ("new-env", 3)):

@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from unittest import mock
 
 from fixture import KB, PC, FakeWin, ext
 from helpers import LO, U, rel
@@ -119,6 +120,9 @@ class Refusals(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("To go ahead, run the same command with --yes."))
         self.assertEqual(win.calls, [])
         self.assertEqual(snapshot(self.pc), self.before)
+        downloads = number(self.pc, self.report, U + "Downloads\\old-setup.exe")
+        out = self.clean("--items", str(downloads))[1]
+        self.assertIn("\n   Old installers and unfinished downloads     ", out)  # the summary's short label
 
     def test_it_needs_groups_or_items(self):
         code, _, err = self.clean()
@@ -139,8 +143,26 @@ class Refusals(unittest.TestCase):
     def test_unknown_names_and_numbers_are_refused(self):
         self.assertIn("The groups in this report are: 1 ", self.clean("--groups", "nope")[2])
         for args in (["--groups", "nope"], ["--groups", "99"], ["--items", "99999"], ["--items", "1", "--skip", "99999"],
-                     ["--items", "x"], ["--items", "-1"]):
+                     ["--items", "x"], ["--items", "-1"], ["--items", "²"], ["--groups", "²"]):
             self.assertEqual(self.clean(*args)[0], 2, args)
+
+    def test_an_item_below_a_folder_that_cannot_be_read_is_left_out(self):
+        clip = self.pc.p(U + "Documents\\locked\\sub\\clip.mp4")  # behind the fixture's deny rule
+        st = os.stat(clip)
+        n = number(self.pc, self.report, U + "Videos\\old-trip.mp4")
+
+        def point(r):
+            for g in r["groups"]:
+                for i in g["items"]:
+                    if i["n"] == n:
+                        i.update(path=clip, size=st.st_size, mtime=st.st_mtime)
+        code, out, _ = run(["clean", self.edited(point), "--items", str(n)], env=self.pc.env(), win=FakeWin())
+        self.assertEqual(left_reasons(out), {n: clean.NO_RULE})
+
+    def test_a_zero_mb_recycle_bin_takes_nothing(self):
+        out = self.clean("--groups", "temp", win=FakeWin(max_mb=0))[1]
+        self.assertIn("Would move to the Recycle Bin:\n   Nothing.", out)
+        self.assertEqual(set(left_reasons(out).values()), {clean.NO_BIN})
 
     def test_a_report_older_than_a_day_is_refused(self):
         def age(r):
@@ -330,6 +352,58 @@ class Moves(unittest.TestCase):
         self.assertEqual(left_reasons(out), {venv: clean.NO_RULE, node: rules.RECENT, nopkg: clean.NO_RULE,
                                              empty: clean.NOT_EMPTY, dup: clean.NO_RULE, temp_dir: rules.ONLINE,
                                              setup: clean.NO_RULE, cache: clean.GONE})
+
+    def test_each_project_is_read_once_per_run(self):
+        js, report = scan_report(self.pc)
+        both = [number(self.pc, report, CODE + "dotnet-app\\" + x) for x in ("bin", "obj")]
+        calls, real = [], clean.newest_change
+
+        def counted(folder):
+            calls.append(folder)
+            return real(folder)
+        with mock.patch.object(clean, "newest_change", counted):
+            out, _ = self.clean(js, "--items", "%d,%d" % tuple(both))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(left_reasons(out), {})
+        self.pc.file(CODE + "dotnet-app\\Changed.cs", age=0)
+        out, _ = self.clean(js, "--items", "%d,%d" % tuple(both))
+        self.assertEqual(left_reasons(out), {both[0]: rules.RECENT, both[1]: rules.RECENT})
+
+    def test_something_new_at_a_moved_path_is_never_touched(self):
+        js, report = scan_report(self.pc)
+        n = number(self.pc, report, LO + "Temp\\old.tmp")
+        path = self.pc.p(LO + "Temp\\old.tmp")
+
+        class Replacing(FakeWin):
+            def recycle(self, paths):
+                done = FakeWin.recycle(self, paths)
+                if len(self.calls) == 1:  # an app writes a new file there before the check
+                    with open(ext(paths[0]), "w") as f:
+                        f.write("new")
+                return done
+        win = Replacing(bin_dir=self.bin)
+        code, out, err = run(["clean", js, "--items", str(n), "--yes"], env=self.pc.env(), win=win)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(win.calls, [[path]])  # moved once, never tried again
+        with open(path) as f:
+            self.assertEqual(f.read(), "new")
+        self.assertEqual(left_reasons(out), {})
+
+    def test_a_copy_inside_another_chosen_folder_does_not_count_as_kept(self):
+        js, report = scan_report(self.pc)
+        dup = number(self.pc, report, U + "Pictures\\beach.jpg")
+        folder = number(self.pc, report, LO + "Temp\\old-folder")
+        with open(self.pc.p(U + "Pictures\\beach.jpg"), "rb") as f:
+            photo = f.read()
+        copy = self.pc.file(LO + "Temp\\old-folder\\beach-copy.jpg", data=photo)
+        for g in report["groups"]:
+            for i in g["items"]:
+                if i["n"] == dup:
+                    i["same_as"] = [copy]  # edited: its only other copy sits in a chosen folder
+        save(report, js)
+        out, win = self.clean(js, "--items", "%d,%d" % (dup, folder), "--yes")
+        self.assertEqual(win.moved, [])
+        self.assertEqual(left_reasons(out), {dup: clean.KEEP_ONE, folder: clean.NO_RULE})  # (old-folder is new now)
 
     def test_an_item_in_use_is_tried_again_then_left_out(self):
         js, report = scan_report(self.pc)

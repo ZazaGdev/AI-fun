@@ -66,7 +66,7 @@ def numbers(text, what):
     for t in (text or "").split(","):
         t = t.strip()
         if t:
-            if not t.isdigit():
+            if not t.isdecimal():
                 raise Refused("Not %s number: %s" % (what, t))
             out.append(int(t))
     return out
@@ -89,7 +89,7 @@ def select(report, groups, items, skip):
     for token in groups:
         if token in rules.NOT_OFFERED:
             raise Refused("%s is not offered: Windows handles it. See the Not offered list." % token)
-        g = by_n.get(int(token)) if token.isdigit() else by_id.get(token)
+        g = by_n.get(int(token)) if token.isdecimal() else by_id.get(token)
         if g is None:
             raise Refused("Unknown group: %s. The groups in this report are: %s." % (token, listing))
         if g["id"] not in rules.GROUPS:
@@ -260,49 +260,60 @@ class Checker:
         self.large_age = setting(report, "large_days", 180) * DAY
         self.selected = {ncase(i["path"]) for _, i in chosen if isinstance(i.get("path"), str)}
         self.processes = {p.lower() for p in processes}
+        self.newest = {}  # outermost project (ncase): its newest change, read once per run
         self.known = {}
         for t in rules.known_targets(env):
             if not rules.protected(env, t["path"]):
                 self.known.setdefault(ncase(t["path"]), t)
 
     def still_matches(self, gid, item):
-        """Why `item` of group `gid` may not be removed now, or None, with its size now. All of it
-        is worked out again from the disk and the current rules: the report gives only the path,
-        and for Your call files the size and time the user saw."""
+        """Why `item` of group `gid` may not be removed now, or None, with its size now and the
+        identity (volume, file id) of what was checked. All of it is worked out again from the disk
+        and the current rules: the report gives only the path, and for Your call files the size and
+        time the user saw."""
         p, kind = item.get("path"), item.get("kind")
         if not isinstance(p, str) or kind not in ("file", "dir") or gid not in rules.GROUPS:
-            return BROKEN, 0
+            return BROKEN, 0, None
         if winsys.odd_name(p):
-            return NOT_USUAL, 0
+            return NOT_USUAL, 0, None
         try:
             st = os.stat(ext(p), follow_symlinks=False)
         except OSError:
-            return GONE, 0
+            return GONE, 0, None
         if st.st_file_attributes & REPARSE:
-            return IS_LINK, 0
+            return IS_LINK, 0, None
         if not winsys.canonical(p):  # an 8.3 short name, or a link on the way
-            return NOT_USUAL, 0
+            return NOT_USUAL, 0, None
         if not under(ncase(p), self.n_root):
-            return OUTSIDE_ROOT, 0
+            return OUTSIDE_ROOT, 0, None
         if rules.protected(self.env, p) or ncase(p) in self.env.never:
-            return PROTECTED, 0
+            return PROTECTED, 0, None
         try:
             linked = rules.link_between(self.root, p)
         except OSError:
-            return GONE, 0
+            return GONE, 0, None
         if st.st_file_attributes & PLACEHOLDER:
-            return rules.ONLINE, 0
+            return rules.ONLINE, 0, None
         if linked:
-            return rules.LINKS, 0
+            return rules.LINKS, 0, None
         isdir = stat.S_ISDIR(st.st_mode)
         if isdir != (kind == "dir") or not (isdir or stat.S_ISREG(st.st_mode)):
-            return CHANGED, 0
+            return CHANGED, 0, None
         t = tree(p, self.env.never) if isdir else None
         if t and t.problem():
-            return t.problem(), 0
+            return t.problem(), 0, None
         latest = max(st.st_mtime, birth(st), t.latest if t else 0.0)
         why = getattr(self, "rule_" + gid.replace("-", "_"))(gid, p, item, st, latest)
-        return (why, 0) if why else (None, t.size if t else st.st_size)
+        return (why, 0, None) if why else (None, t.size if t else st.st_size, (st.st_dev, st.st_ino))
+
+    def chosen(self, path):
+        """`path` or a folder above it is chosen in this run, so it goes too."""
+        n = ncase(path)
+        while n not in self.selected:
+            if os.path.dirname(n) == n:
+                return False
+            n = os.path.dirname(n)
+        return True
 
     # ---- one per group: does the path still fit its rule, worked out now ----
 
@@ -342,7 +353,12 @@ class Checker:
         """The 14-day rule over every project the item is inside, read again now."""
         if any(not under(ncase(q), self.n_root) for q in projects):
             return rules.OUTSIDE
-        newest = newest_change(projects[0]) if projects else 0.0
+        newest = 0.0
+        if projects:  # the outermost project holds the others; it is read once per run
+            key = ncase(projects[0])
+            if key not in self.newest:
+                self.newest[key] = newest_change(projects[0])
+            newest = self.newest[key]
         if newest is None:
             return rules.PARTLY
         since = self.now - rules.PROJECT_DAYS * DAY
@@ -393,7 +409,7 @@ class Checker:
                     or sq.st_size != st.st_size or (sq.st_dev, sq.st_ino) == (st.st_dev, st.st_ino)
                     or file_hash(q, sq.st_size, False) != h):
                 continue
-            if ncase(q) in self.selected:
+            if self.chosen(q):
                 chosen_copy = True
                 continue
             return None  # a copy stays
@@ -426,7 +442,7 @@ def bin_check(ok, win):
     for drive, entries in sorted(by_drive.items()):
         s = win.recycle_settings(drive)
         usable = win.drive_type(drive) == winsys.DRIVE_FIXED and not s["nuke"] and not s["policy"]
-        cap = s["max_mb"] * MB if s["max_mb"] else None
+        cap = s["max_mb"] * MB if s["max_mb"] is not None else None  # (0 MB is a real, tiny bin)
         fit = []
         for e in entries:
             if not usable or len(e[1]["path"]) >= MAX_PATH or (cap is not None and e[2] > cap):
@@ -442,20 +458,22 @@ def bin_check(ok, win):
     return sorted(keep, key=lambda e: order[id(e[1])]), left, warnings
 
 
-def gone(path):
+def still_there(path, ident):
+    """True when what was checked (volume and file id) is still at `path`, or when that cannot be
+    told; False when the path is gone or holds something else now."""
     try:
-        os.stat(ext(path), follow_symlinks=False)
+        st = os.stat(ext(path), follow_symlinks=False)
     except FileNotFoundError:
-        return True
-    except OSError:
         return False
-    return False
+    except OSError:
+        return True
+    return (st.st_dev, st.st_ino) == ident
 
 
 def move(ok, win):
     """Move the checked items to the Recycle Bin, up to 200 paths a call. An item counts as moved
-    only when its path is gone; one still there is tried once more on its own. Returns (moved,
-    left)."""
+    only when what was checked is no longer at its path. One still there is tried once more on
+    its own; something new at the path is never touched. Returns (moved, left)."""
     moved, left = [], []
     for start in range(0, len(ok), BATCH):
         batch = ok[start:start + BATCH]
@@ -464,10 +482,10 @@ def move(ok, win):
         except ValueError:
             pass  # a path the call refuses: each one is tried on its own below
         for e in batch:
-            if not gone(e[1]["path"]):
+            if still_there(e[1]["path"], e[3]):
                 try:
                     win.recycle([e[1]["path"]])
                 except ValueError:
                     pass
-            (moved if gone(e[1]["path"]) else left).append(e)
+            (left if still_there(e[1]["path"], e[3]) else moved).append(e)
     return moved, [(e[0], e[1], IN_USE) for e in left]

@@ -102,6 +102,7 @@ class PathForms(unittest.TestCase):
             ("forward slash", b + "/plain/file.txt", True, False),
             ("trailing space", j(b, "spaced "), True, False),
             ("trailing dot", j(b, "dotted."), True, False),
+            ("a file's stream", j(b, "plain", "file.txt") + ":zone", True, False),
         ]
         for what, path, odd, canon in rows:
             self.assertEqual(winsys.odd_name(path), odd, what)

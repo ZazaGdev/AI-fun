@@ -104,10 +104,14 @@ def pad(label, width):
     return label + " " * max(2, width - len(label))
 
 
+def short_label(gid, label):
+    """A group's label as the summary columns print it."""
+    return SHORT.get(gid, label.replace(" (pick the ones to remove)", ""))
+
+
 def group_line(g, running):
-    label = SHORT.get(g["id"], g["label"].replace(" (pick the ones to remove)", ""))
-    return "%4d. %s%8s   %11s   %s%s" % (g["n"], pad(label, 41), size_text(g["size"]), count_text(g),
-                                         rules.SAFETY[g["safety"]], close_note(g, running))
+    return "%4d. %s%8s   %11s   %s%s" % (g["n"], pad(short_label(g["id"], g["label"]), 41), size_text(g["size"]),
+                                         count_text(g), rules.SAFETY[g["safety"]], close_note(g, running))
 
 
 def pick_lines(g):
@@ -338,12 +342,12 @@ def moved_lines(head, entries, days):
     if not entries:
         return [head, "   Nothing."]
     by = {}
-    for gid, _, size in entries:
-        n, s = by.get(gid, (0, 0))
-        by[gid] = (n + 1, s + size)
+    for e in entries:  # (group, item, size, identity)
+        n, s = by.get(e[0], (0, 0))
+        by[e[0]] = (n + 1, s + e[2])
     out = [head]
-    out += ["   %s%8s   %s" % (pad(rules.label(gid, days), 44), size_text(by[gid][1]), plural(by[gid][0], "item"))
-            for gid in rules.GROUP_ORDER if gid in by]
+    out += ["   %s%8s   %s" % (pad(short_label(gid, rules.label(gid, days)), 44), size_text(by[gid][1]),
+                               plural(by[gid][0], "item")) for gid in rules.GROUP_ORDER if gid in by]
     out.append("   In all: about %s in %s." % (size_text(sum(e[2] for e in entries)), plural(len(entries), "item")))
     return out
 
@@ -391,7 +395,8 @@ def cmd_clean(a, env=None, win=None):
     now = time.time()
     report_path = os.path.abspath(a.report)
     if env is None:
-        env = rules.Env.from_system()
+        winsys.set_low_priority()
+        env = rules.Env.from_system(out_dir=os.path.dirname(report_path))  # the reports' folder is never touched
     win = win or winsys.WinSys()
     try:
         groups = [t.strip() for t in a.groups.split(",") if t.strip()]
@@ -407,11 +412,11 @@ def cmd_clean(a, env=None, win=None):
     checker = clean.Checker(env, report, now, chosen, win.processes())
     ok, left = [], []
     for gid, item in chosen:
-        why, size = checker.still_matches(gid, item)
+        why, size, ident = checker.still_matches(gid, item)
         if why:
             left.append((gid, item, why))
         else:
-            ok.append((gid, item, size))
+            ok.append((gid, item, size, ident))
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
     days = clean.setting(report, "large_days", 180)
