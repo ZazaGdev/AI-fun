@@ -100,12 +100,17 @@ class ScanCommand(unittest.TestCase):
         self.assertEqual(lines[0], "Scanning %s. This only reads; on a whole drive it can take several minutes."
                          % self.pc.C)
         self.assertTrue(lines[1].startswith("Scan of %s finished in " % self.pc.C))
-        self.assertRegex(out, r"Can be removed: about [\d.]+ KB in 14 groups\.")
+        self.assertRegex(out, r"Could be cleaned up: about [\d.]+ KB in 13 groups\.")
         self.assertIn("Safe (close Chrome first)", out)
         self.assertIn("Not offered, Windows handles these:", out)
         self.assertIn("Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again.", out)
-        self.assertIn("Your call: your own files; pick them one by one by number.", out)
-        self.assertRegex(out, r"Duplicate files \(pick which copies\) +40 KB   1 set, 3 copies   Your call")
+        self.assertIn("Your call: your own files; only you can tell whether you still need each one.", out)
+        self.assertRegex(out, r"\d\. Duplicate files +40 KB   1 set, 3 copies   Your call")
+        plain = out.lower()  # the summary suggests; it never asks the user to pick or remove anything
+        for fine in ("nothing was removed", "removing files here removes them on your other devices too"):
+            plain = plain.replace(fine, "")
+        for nudge in ("pick", "remove", "delete"):
+            self.assertNotIn(nudge, plain, nudge)
         self.assertRegex(out, r"\n        set 1: #\d+  20 KB  .*\\Pictures\\beach\.jpg  \(suggested keep\)\n"
                               r"               #\d+  20 KB  .*\\Downloads\\beach \(1\)\.jpg\n")
         self.assertRegex(out, r"Large files not changed in 6 months +600 KB +2 items   Your call\n"
@@ -123,12 +128,12 @@ class ScanCommand(unittest.TestCase):
         txt = glob.glob(os.path.join(self.pc.out, "scan-*.txt"))
         self.assertEqual((len(js), len(txt)), (1, 1))
         self.assertRegex(os.path.basename(js[0]), r"^scan-\d{8}-\d{6}\.json$")
-        self.assertTrue(out.rstrip().endswith("For the clean step: " + js[0]))
+        self.assertTrue(out.rstrip().endswith("Report data: " + js[0] + "\nNothing was removed. This scan only reads."))
         self.assertIn("Full list: " + txt[0], out)
         with open(js[0], encoding="utf-8") as f:
             report = json.load(f)
         self.assertEqual((report["tool"], report["version"]), ("disk-cleanup", 1))
-        self.assertEqual(len(report["groups"]), 14)
+        self.assertEqual(len(report["groups"]), 13)
         with open(txt[0], encoding="utf-8") as f:
             text = f.read()
         for g in report["groups"]:
@@ -136,6 +141,11 @@ class ScanCommand(unittest.TestCase):
                 self.assertIn("#%d  " % i["n"], text)
                 self.assertIn(i["path"], text)
         self.assertIn("contains online-only files", text)
+        plain = text.lower()  # the text report suggests too; it never asks for anything
+        for fine in ("removing files here removes them on your other devices too", "this tool never removes"):
+            plain = plain.replace(fine, "")
+        for nudge in ("pick", "remove", "delete"):
+            self.assertNotIn(nudge, plain, nudge)
         self.assertIn("1960-01-01  " + self.pc.ancient, text)
         self.assertIn("   set 1, 20 KB each:\n", text)
         self.assertRegex(text, r"      #\d+  20 KB  \d{4}-\d\d-\d\d  .*\\Pictures\\beach\.jpg  suggested keep\n")
@@ -211,9 +221,9 @@ class ScanCommand(unittest.TestCase):
     def test_summary_without_anything_to_remove(self):
         _, report = run_scan(self.pc, os.path.join(self.pc.C, "Windows"))
         s = dc.summary(report, set(), "a.txt", "a.json")
-        self.assertIn("Nothing was found that can be removed.", s)
+        self.assertIn("Nothing was found that could be cleaned up.", s)
         self.assertIn("System crash dumps", s)
-        self.assertNotIn("Can be removed", s)
+        self.assertNotIn("Could be cleaned up", s)
 
     def test_your_call_groups_show_their_first_items(self):
         GB = 1024 ** 3
@@ -233,7 +243,7 @@ class ScanCommand(unittest.TestCase):
         s = dc.summary(report, set(), "C:\\Users\\you\\disk-cleanup\\scan-20261121-140500.txt",
                        "C:\\Users\\you\\disk-cleanup\\scan-20261121-140500.json")
         self.assertIn("Scan of D:\\ finished in 2 min 10 s: 812,345 files in 98,765 folders.\n", s)
-        self.assertIn("\n   8. Duplicate files (pick which copies)        3.3 GB   5 sets, 10 copies   Your call\n"
+        self.assertIn("\n   8. " + "Duplicate files".ljust(41) + "  3.3 GB   5 sets, 10 copies   Your call\n"
                       "        set 1: #300  1.2 GB  D:\\Videos\\trip0.mp4  (suggested keep)\n"
                       "               #301  1.2 GB  D:\\Backup\\trip0.mp4\n", s)
         self.assertIn("        set 3: #304", s)
@@ -247,7 +257,8 @@ class ScanCommand(unittest.TestCase):
         self.assertIn("        %8s  %s\n        and 5 more in the full list\n" % ("1.0 GB", "D:\\Games\\G19"), s)
         self.assertNotIn("G20", s)
         self.assertIn("Could not read 42 folders (no permission). They were skipped.", s)
-        self.assertTrue(s.endswith("For the clean step: C:\\Users\\you\\disk-cleanup\\scan-20261121-140500.json"))
+        self.assertTrue(s.endswith("Report data: C:\\Users\\you\\disk-cleanup\\scan-20261121-140500.json\n"
+                                   "Nothing was removed. This scan only reads."))
 
     def test_progress_lines(self):
         err = io.StringIO()

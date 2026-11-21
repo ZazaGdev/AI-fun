@@ -112,7 +112,7 @@ class Refusals(unittest.TestCase):
     def test_dry_run_changes_nothing(self):
         win = FakeWin()
         dup = number(self.pc, self.report, U + "Pictures\\Backup\\beach.jpg")
-        code, out, err = self.clean("--groups", "1,2,3,temp,dev-cache,empty", "--items", str(dup), win=win)
+        code, out, err = self.clean("--groups", "1,2,3,temp,dev-cache", "--items", str(dup), win=win)
         self.assertEqual(code, 0, err)
         self.assertTrue(out.startswith("Dry run: nothing has been changed.\n"))
         self.assertIn("Would move to the Recycle Bin:", out)
@@ -143,7 +143,8 @@ class Refusals(unittest.TestCase):
     def test_unknown_names_and_numbers_are_refused(self):
         self.assertIn("The groups in this report are: 1 ", self.clean("--groups", "nope")[2])
         for args in (["--groups", "nope"], ["--groups", "99"], ["--items", "99999"], ["--items", "1", "--skip", "99999"],
-                     ["--items", "x"], ["--items", "-1"], ["--items", "²"], ["--groups", "²"]):
+                     ["--items", "x"], ["--items", "-1"], ["--items", "²"], ["--groups", "²"],
+                     ["--groups", "empty"]):  # (empty folders are not listed at all)
             self.assertEqual(self.clean(*args)[0], 2, args)
 
     def test_an_item_below_a_folder_that_cannot_be_read_is_left_out(self):
@@ -215,10 +216,10 @@ class Refusals(unittest.TestCase):
     def test_a_short_name_path_is_left_out(self):
         import ctypes
         buf = ctypes.create_unicode_buffer(1024)
-        ctypes.windll.kernel32.GetShortPathNameW(self.pc.p(U + "Documents\\old-empty"), buf, 1024)
+        ctypes.windll.kernel32.GetShortPathNameW(self.pc.p(LO + "Temp\\old-folder"), buf, 1024)
         if "~" not in os.path.basename(buf.value):
             self.skipTest("8.3 names are switched off on this volume")
-        n = number(self.pc, self.report, U + "Documents\\old-empty")
+        n = number(self.pc, self.report, LO + "Temp\\old-folder")
 
         def point(r):
             for g in r["groups"]:
@@ -336,22 +337,21 @@ class Moves(unittest.TestCase):
         js, report = scan_report(self.pc)
         n = lambda p: number(self.pc, report, p)  # noqa: E731
         venv, node, nopkg = n(CODE + "py-app\\.venv"), n(CODE + "old-app\\node_modules"), n(CODE + "dotnet-app\\bin")
-        empty, dup, temp_dir = n(U + "Documents\\old-empty"), n(U + "Pictures\\beach.jpg"), n(LO + "Temp\\deep-old")
+        dup, temp_dir = n(U + "Pictures\\beach.jpg"), n(LO + "Temp\\deep-old")
         setup, cache = n(U + "Downloads\\old-setup.exe"), n(CODE + "py-app\\__pycache__")
         self.pc.file(CODE + "py-app\\.venv\\notes.txt")                  # someone's own file in the venv
         self.pc.file(CODE + "old-app\\src\\new.js", age=0)               # the project changed today
         os.remove(self.pc.p(CODE + "dotnet-app\\App.csproj"))            # bin is no longer next to a project file
-        self.pc.file(U + "Documents\\old-empty\\inner\\a.txt")           # the empty folder is not empty
         self.pc.dir(U + "Pictures\\.stfolder")                           # Pictures became a Syncthing folder
         self.pc.set_offline(self.pc.p(LO + "Temp\\deep-old"))            # the temp folder went online-only
         self.pc.file(U + "Downloads\\helper.dll")                        # Downloads now holds a program
         os.rename(self.pc.p(CODE + "py-app\\__pycache__"), self.pc.p(CODE + "py-app\\pycache-kept"))
-        out, win = self.clean(js, "--items", ",".join(map(str, (venv, node, nopkg, empty, dup, temp_dir, setup, cache))),
+        out, win = self.clean(js, "--items", ",".join(map(str, (venv, node, nopkg, dup, temp_dir, setup, cache))),
                               "--yes")
         self.assertEqual(win.moved, [])
         self.assertEqual(left_reasons(out), {venv: clean.NO_RULE, node: rules.RECENT, nopkg: clean.NO_RULE,
-                                             empty: clean.NOT_EMPTY, dup: clean.NO_RULE, temp_dir: rules.ONLINE,
-                                             setup: clean.NO_RULE, cache: clean.GONE})
+                                             dup: clean.NO_RULE, temp_dir: rules.ONLINE, setup: clean.NO_RULE,
+                                             cache: clean.GONE})
 
     def test_each_project_is_read_once_per_run(self):
         js, report = scan_report(self.pc)

@@ -16,7 +16,7 @@ DAY = 86400.0
 MB = 1024 * 1024
 REPARSE = 0x400  # junction, symlink or mount point: never followed, never offered
 PLACEHOLDER = 0x400000 | 0x40000 | 0x1000  # cloud placeholder: reading it downloads it
-TEMP_DAYS, PROJECT_DAYS, EMPTY_DAYS = 7, 14, 30
+TEMP_DAYS, PROJECT_DAYS = 7, 14
 
 SAFETY = {"safe": "Safe", "redo": "Easy to get back", "check": "Your call"}
 SAFETY_ORDER = ("safe", "redo", "check")
@@ -34,10 +34,9 @@ GROUPS = {
     "build-output": ("Other build output", "redo", ""),
     "py-cache": ("Python caches", "safe", ""),
     "py-venv": ("Python virtual environments", "redo", "Reinstall packages with pip install -r requirements.txt."),
-    "duplicates": ("Duplicate files (pick which copies to remove)", "check", ""),
-    "empty": ("Empty folders", "safe", ""),
-    "large-old": ("Large files not changed in 6 months (pick the ones to remove)", "check", ""),
-}
+    "duplicates": ("Duplicate files (each copy listed)", "check", ""),
+    "large-old": ("Large files not changed in 6 months", "check", ""),
+}  # (no group of empty folders: apps and games often need theirs, and they free nothing)
 GROUP_ORDER = list(GROUPS)
 BUILD_GROUPS = ("build-node", "build-output", "py-venv")  # the 14-day project rule applies to these
 
@@ -459,14 +458,6 @@ def protected(env, path):
         return True
     return any(under(n, q) for q in env.n_windows | env.n_programs | env.n_synced | env.n_never_inside
                | where(env.program_data))
-
-
-def may_offer_empty(env, path, root):
-    """An empty folder may be offered unless it is the scan root, directly in a drive root, the
-    profile or directly in it, a shell folder such as Documents or Music, or never removed."""
-    n, up = ncase(path), ncase(os.path.dirname(path))
-    return not (n == ncase(root) or env.is_root(up) or n in env.n_profiles or up in env.n_profiles
-                or n in env.n_shell or n in env.never)
 
 
 def keep_key(env, path, mtime):

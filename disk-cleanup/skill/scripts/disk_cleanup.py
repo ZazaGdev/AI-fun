@@ -1,5 +1,6 @@
-"""disk-cleanup: scan a Windows drive or folder and list what can be removed, grouped by kind,
-with sizes and how safe each group is; then move only what you pick to the Recycle Bin.
+"""disk-cleanup: scan a Windows drive or folder and list what could be cleaned up, grouped by kind,
+with sizes and how safe each group is. It removes nothing by itself; only when you ask for
+specific groups or items does clean move exactly those to the Recycle Bin.
 
 Usage:
   python disk_cleanup.py scan <path> [--out DIR] [--workers N] [--dupe-min-mb 1] [--large-mb 500] [--large-days 180]
@@ -28,7 +29,7 @@ import winsys
 LEFT_SHOWN = 30  # skipped items printed by clean; the log has all of them
 
 # labels too long for the summary's column, as in the plan's sample
-SHORT = {"downloads": "Old installers and unfinished downloads", "duplicates": "Duplicate files (pick which copies)"}
+SHORT = {"downloads": "Old installers and unfinished downloads", "duplicates": "Duplicate files"}
 PICK_SHOWN, SETS_SHOWN, PARTS_SHOWN = 10, 3, 20
 
 
@@ -106,7 +107,7 @@ def pad(label, width):
 
 def short_label(gid, label):
     """A group's label as the summary columns print it."""
-    return SHORT.get(gid, label.replace(" (pick the ones to remove)", ""))
+    return SHORT.get(gid, label)
 
 
 def group_line(g, running):
@@ -149,7 +150,7 @@ def summary(report, running, txt_path, json_path):
     out = ["Scan of %s finished in %s: %s in %s." % (report["root"], duration(st["seconds"]),
                                                      plural(st["files"], "file"), plural(st["folders"], "folder")), ""]
     if groups:
-        out += ["Can be removed: about %s in %s." % (size_text(sum(g["size"] for g in groups)),
+        out += ["Could be cleaned up: about %s in %s." % (size_text(sum(g["size"] for g in groups)),
                                                     plural(len(groups), "group")), ""]
         for g in groups:
             out.append(group_line(g, running))
@@ -157,9 +158,9 @@ def summary(report, running, txt_path, json_path):
                 out += pick_lines(g)
         out += ["", "Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again."]
         if any(g["safety"] == "check" for g in groups):
-            out.append("Your call: your own files; pick them one by one by number.")
+            out.append("Your call: your own files; only you can tell whether you still need each one.")
     else:
-        out.append("Nothing was found that can be removed.")
+        out.append("Nothing was found that could be cleaned up.")
     if report["windows"]:
         out += ["", "Not offered, Windows handles these:"]
         for w in report["windows"]:
@@ -173,7 +174,7 @@ def summary(report, running, txt_path, json_path):
         if un["count"]:
             why = " (no permission)" if un["denied"] == un["count"] else ""
             out.append("Could not read %s%s. They were skipped." % (plural(un["count"], "folder"), why))
-    out += ["", "Full list: " + txt_path, "For the clean step: " + json_path]
+    out += ["", "Full list: " + txt_path, "Report data: " + json_path, "Nothing was removed. This scan only reads."]
     return "\n".join(out)
 
 
@@ -232,7 +233,7 @@ def text_report(report, running):
         out += skipped_lines(g)
         out.append("")
     if not report["groups"]:
-        out += ["Nothing was found that can be removed.", ""]
+        out += ["Nothing was found that could be cleaned up.", ""]
     for g in report["left_out"]:
         out.append("%s: nothing offered." % g["label"])
         out += skipped_lines(g)
@@ -442,7 +443,7 @@ def not_negative(text):
 
 
 def parser():
-    ap = argparse.ArgumentParser(prog="disk_cleanup.py", description="List what can be removed from a Windows "
+    ap = argparse.ArgumentParser(prog="disk_cleanup.py", description="List what could be cleaned up on a Windows "
                                  "drive or folder, grouped by kind, with sizes and how safe each group is.")
     sub = ap.add_subparsers(dest="cmd")
     sub.required = True
@@ -453,7 +454,7 @@ def parser():
     sc.add_argument("--dupe-min-mb", type=not_negative, default=1.0, help="smallest file to compare for duplicates")
     sc.add_argument("--large-mb", type=not_negative, default=500.0, help="smallest file to list as large")
     sc.add_argument("--large-days", type=not_negative, default=180.0, help="days unchanged for a large file")
-    cl = sub.add_parser("clean", help="move what you pick from a scan report to the Recycle Bin")
+    cl = sub.add_parser("clean", help="move the groups or items you ask for, from a scan report, to the Recycle Bin")
     cl.add_argument("report", help="the scan-*.json file the scan wrote")
     cl.add_argument("--groups", default="", help="group numbers or names from the summary, such as 1,3,temp")
     cl.add_argument("--items", default="", help="item numbers from the full list, such as 12,17")

@@ -26,7 +26,6 @@ GONE = "it is not there any more"
 IS_LINK = "it is itself a link to another place"
 CHANGED = "it changed after the scan"
 NO_RULE = "it no longer fits the rule it was offered by"
-NOT_EMPTY = "it is not an old empty folder any more"
 KEEP_ONE = "keep at least one copy: every copy of this file was selected"
 NO_COPY = "no other copy of it is left as it was"
 NO_BIN = "Windows can't put this in the Recycle Bin"
@@ -219,31 +218,6 @@ def folder_area(env, folder):
     return None, projects
 
 
-def empty_now(env, path, since):
-    """True when `path` is still an old empty folder as the scan finds one: nothing but folders
-    anywhere inside, each one walked by the scan and unchanged (modified or created) since `since`."""
-    stack = [path]
-    while stack:
-        d = stack.pop()
-        try:
-            st = os.stat(ext(d), follow_symlinks=False)
-            with os.scandir(ext(d)) as it:
-                entries = [(e.name, e.is_dir(follow_symlinks=False), e.stat(follow_symlinks=False)) for e in it]
-        except OSError:
-            return False
-        if max(st.st_mtime, birth(st)) >= since:
-            return False
-        dirs, nd = {n.lower() for n, _, _ in entries}, ncase(d)
-        for name, isdir, est in entries:
-            sub = os.path.join(d, name)
-            if (not isdir or est.st_file_attributes & (REPARSE | PLACEHOLDER) or name.lower() == "node_modules"
-                    or rules.dir_kind(env, sub, name, env.is_root(nd), nd in env.n_profiles, nd in env.n_profiles_dirs)
-                    or rules.build_rule(name, set(), dirs)):
-                return False
-            stack.append(sub)
-    return True
-
-
 def setting(report, key, default):
     v = (report.get("settings") if isinstance(report.get("settings"), dict) else {}).get(key, default)
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0 else default
@@ -423,12 +397,6 @@ class Checker:
                 or st.st_size < self.large_min or self.now - latest <= self.large_age):
             return NO_RULE
         return None
-
-    def rule_empty(self, gid, p, item, st, latest):
-        kind, projects, _ = rules.context(self.env, p, strict=True)
-        if kind or projects or not rules.may_offer_empty(self.env, p, self.root):
-            return NO_RULE
-        return None if empty_now(self.env, p, self.now - rules.EMPTY_DAYS * DAY) else NOT_EMPTY
 
 
 def bin_check(ok, win):

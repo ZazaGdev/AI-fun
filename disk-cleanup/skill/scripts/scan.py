@@ -117,7 +117,6 @@ class Scanner:
         self.recency = {}    # project folder (ncase): newest change the walk saw in it
         self.dupes = []      # (path, size, mtime) of user-area files that may have copies
         self.large = []      # (path, size, mtime, latest) of large files not changed for large_days
-        self.zero = {}       # user-area folders with no files and only walked folders: ncase -> (path, mtime, latest, children)
         self.sets = []       # duplicate sets: (size, hash, [(path, mtime), ...])
         self.threads = []    # names of the worker threads that ran
 
@@ -169,7 +168,6 @@ class Scanner:
         self.apply_recency()
         self.find_duplicates(start)
         self.find_large()
-        self.find_empty()
         return self.report(time.time() - start)
 
     # ---- reading ----
@@ -441,27 +439,19 @@ class Scanner:
             if (x in rules.CONTENT or x in rules.DISK_IMAGES) and size >= self.large_min \
                     and self.now - latest > self.large_age:
                 large.append((p, size, mt, latest))
-        children, clean = [], not files  # files counts links and online-only files too
         for name, isdir, a, size, dm, db in entries:
-            if not isdir:
+            if not isdir or a & (REPARSE | PLACEHOLDER):  # a link, or an online-only folder: never entered
                 continue
             p = os.path.join(path, name)
-            if a & (REPARSE | PLACEHOLDER):  # a link, or an online-only folder: never entered
-                clean = False
-                continue
             kind = rules.dir_kind(env, p, name, at_root, at_profile, n in env.n_profiles_dirs)
             rule = rules.build_rule(name, files, dirs) if kind is None else None
             if rule:
                 group, note = rule
                 self.put(self.candidate, group, p, dm, db, note, None, 0.0, () if group == "py-cache" else projects)
-                clean = False
             elif kind is None and name.lower() != "node_modules":  # no package.json beside it: left alone
                 self.put(self.list_dir, p, projects, dm, db)
-                children.append(ncase(p))
-            else:
-                if kind in (rules.PROGRAM, rules.SYNCED):
-                    self.put(self.area, "programs" if kind == rules.PROGRAM else "synced", p)
-                clean = False
+            elif kind in (rules.PROGRAM, rules.SYNCED):
+                self.put(self.area, "programs" if kind == rules.PROGRAM else "synced", p)
         with self.lock:
             self.files += count
             self.folders += 1
@@ -470,8 +460,6 @@ class Scanner:
             for pr in projects if newest else ():
                 k = ncase(pr)
                 self.recency[k] = max(self.recency.get(k, 0.0), newest)
-            if user and clean:
-                self.zero[n] = (path, mtime, max(mtime, btime), children)
 
     # ---- after the walk ----
 
@@ -541,19 +529,6 @@ class Scanner:
         for p, size, mtime, latest in self.large:
             if ncase(p) not in in_sets:
                 self.add("large-old", p, "file", size, mtime, latest=latest)
-
-    def find_empty(self):
-        """The top-most empty folders of user areas: no files anywhere inside, no links, nothing
-        unreadable, every folder in them unchanged for 30 days, and allowed to be offered."""
-        ok, since = {}, self.now - rules.EMPTY_DAYS * DAY
-        for n in sorted(self.zero, key=lambda k: -k.count(os.sep)):  # the deepest first
-            path, mtime, latest, children = self.zero[n]
-            ok[n] = (latest < since and rules.may_offer_empty(self.env, path, self.root)
-                     and all(ok.get(c, False) for c in children))
-        for n, good in ok.items():
-            path, mtime, latest, _ = self.zero[n]
-            if good and not ok.get(ncase(os.path.dirname(path)), False):
-                self.add("empty", path, "dir", 0, mtime, latest=latest)
 
     # ---- the report ----
 

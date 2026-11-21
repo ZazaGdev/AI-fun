@@ -153,16 +153,6 @@ class Areas(unittest.TestCase):
         with self.assertRaises(OSError):
             rules.link_between(C, self.pc.p(LO + "no-such-folder\\x"))
 
-    def test_may_offer_empty(self):
-        root = self.pc.C
-        ok = lambda p: rules.may_offer_empty(self.env, self.pc.p(p), root)  # noqa: E731
-        self.assertTrue(ok(U + "Documents\\old-empty"))
-        for p in ("C", "C\\Users", U.rstrip("\\"), U + "Music", U + "Documents", U + "Downloads", U + "Saved Games",
-                  "D\\Games"):
-            self.assertFalse(ok(p), p)
-        self.assertFalse(rules.may_offer_empty(self.env, self.pc.p(U + "Documents\\old-empty"),
-                                               self.pc.p(U + "Documents\\old-empty")))
-
     def test_chromium_apps(self):
         found = {rel(self.pc, p) for p in rules.chromium_apps(self.env)}
         self.assertEqual(found, {RO + "discord", RO + "UnknownApp", LO + "SomeVendor\\ElectronApp"})
@@ -257,8 +247,9 @@ class PatternRules(unittest.TestCase):
         self.assertEqual(pick(("D:\\q\\a.jpg", 5), ("D:\\p\\a.jpg", 5)), "D:\\p\\a.jpg")
 
     def test_large_label_follows_the_setting(self):
-        self.assertEqual(rules.label("large-old"), "Large files not changed in 6 months (pick the ones to remove)")
-        self.assertEqual(rules.label("large-old", 30), "Large files not changed in 30 days (pick the ones to remove)")
+        self.assertEqual(rules.label("large-old"), "Large files not changed in 6 months")
+        self.assertEqual(rules.label("large-old", 30), "Large files not changed in 30 days")
+        self.assertEqual(rules.label("duplicates"), "Duplicate files (each copy listed)")
         self.assertEqual(rules.label("temp", 30), "Temporary files older than 7 days")
 
 

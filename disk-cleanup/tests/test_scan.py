@@ -178,7 +178,6 @@ class ScanDriveC(unittest.TestCase):
         self.assertNotIn(LO + "Temp\\extracted-today.txt", self.paths("temp"))
         self.assertNotIn(U + "Downloads\\copied-setup.exe", self.paths("downloads"))
         self.assertNotIn(U + "Videos\\copied-movie.mp4", self.paths("large-old"))
-        self.assertNotIn(U + "Documents\\made-today", self.paths("empty"))
 
     def test_a_stray_marker_in_the_profile_does_not_make_it_a_project(self):
         self.assertEqual(rules.context(self.pc.env(), self.pc.p(U + "Pictures"))[1], ())
@@ -190,11 +189,11 @@ class ScanDriveC(unittest.TestCase):
         self.assertEqual(g["safety"], "check")
         self.assertTrue(all(i["kind"] == "file" and i["size"] == 300 * KB for i in g["items"]))
 
-    def test_empty_folders(self):
-        # nested old empty folders: only the top one; Music is a shell folder; new-empty is too new;
-        # made-today was created today; Dropbox's and inetpub's empty folders are never walked
-        self.assertEqual(self.paths("empty"), {U + "Documents\\old-empty"})
-        self.assertEqual(group(self.report, "empty")["safety"], "safe")
+    def test_empty_folders_are_not_listed(self):
+        # the owner: apps and games often need their empty folders, and they free nothing
+        self.assertNotIn("empty", rules.GROUPS)
+        self.nothing_under(U + "Documents\\old-empty", U + "Documents\\new-empty", U + "Documents\\made-today",
+                           U + "Music", U + "Dropbox (Personal)\\Team", CODE + "svn-site\\old", "C\\inetpub\\history")
 
     def test_only_these_groups(self):
         self.assertEqual({g["id"] for g in self.report["groups"]}, set(rules.GROUPS))
