@@ -4,6 +4,10 @@ import ast
 import hashlib
 import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +59,32 @@ class Prompt(unittest.TestCase):
             self.assertIn("without --yes", body)
             self.assertIn("winget install Python.Python.3.13", body)
             self.assertIn("PowerShell does not expand ~ for python", body)
+            self.assertIn("scan '<path>'", body)
+            self.assertIn("clean '<report data>'", body)
+            self.assertIn("comma-separated", body)
+            self.assertEqual(body.count("10-minute timeout"), 2)
+            self.assertIn("Dropbox's info.json and a few Windows registry keys", body)  # what else it reads
+
+    def test_the_check_line_says_ok_for_copies_of_the_scripts(self):
+        line = next(l.strip() for l in self.text.splitlines() if l.strip().startswith('python -c "import hashlib'))
+        home = tempfile.mkdtemp(prefix="disk-cleanup-test-")
+        try:
+            tool = os.path.join(home, "disk-cleanup", "tool")
+            os.makedirs(tool)
+            for name in FILES:  # written back with Windows line ends, as an editor may
+                with open(os.path.join(tool, name), "w", encoding="utf-8", newline="\r\n") as f:
+                    f.write(read(SCRIPTS, name).replace("\r\n", "\n"))
+            env = dict(os.environ, USERPROFILE=home, HOME=home)
+            out = subprocess.run([sys.executable, "-c", line[len('python -c "'):-1]], capture_output=True, text=True,
+                                 env=env, timeout=120)
+            self.assertEqual(out.stdout.split(), [w for name in FILES for w in (name, "OK")], out.stderr)
+            with open(os.path.join(tool, "rules.py"), "a", encoding="utf-8") as f:
+                f.write("x = 1\n")
+            out = subprocess.run([sys.executable, "-c", line[len('python -c "'):-1]], capture_output=True, text=True,
+                                 env=env, timeout=120)
+            self.assertIn("rules.py MISMATCH", out.stdout)
+        finally:
+            shutil.rmtree(home)
 
     def test_option_2_downloads_the_five_scripts(self):
         option2 = self.text.split("## Option 2", 1)[1]
@@ -74,8 +104,11 @@ class Skill(unittest.TestCase):
             self.assertIn(words, description)
         self.assertIn("4. Stop there. Do not ask whether to remove anything", text)
         self.assertIn("is never a request\n  to remove anything", text)
-        self.assertIn('$DC scan "<path>"', text)
+        self.assertIn("$DC scan '<path>'", text)  # single quotes: Git Bash never ends a "C:\"
+        self.assertIn("$DC clean '<report data>'", text)
         self.assertIn("without `--yes`", text)
+        self.assertIn("comma-separated", text)
+        self.assertEqual(text.count("10-minute timeout"), 2)  # the scan and the clean
 
 
 class Readme(unittest.TestCase):
@@ -84,8 +117,27 @@ class Readme(unittest.TestCase):
         self.assertIn("It removes nothing unless you ask.", text)
         self.assertIn("## If you want something removed", text)
         self.assertIn("Nothing was removed. This scan only reads.", text)
+        self.assertIn("Dropbox's `info.json` and a few Windows registry keys", text)  # what else it reads
         self.assertEqual(text.lower().count("empty folders"), 1)  # only the line saying they are not listed
         self.assertNotRegex(text, r"[A-Za-z]:\\Users\\(?!you\\)\w")  # only made-up user folders
+
+    def test_the_sample_summary_is_one_the_scan_could_print(self):
+        text = read(PROJECT, "README.md")
+        sample = text.split("## A sample summary", 1)[1].split("```")[1]
+        root = re.search(r"Scan of (\S+) finished", sample).group(1)
+        listed = sample.split("Not offered", 1)[0]
+        for path in re.findall(r"[A-Z]:\\\S*", listed.split("finished", 1)[1]):
+            self.assertTrue(path.lower().startswith(root.lower()), path)  # nothing outside the scanned folder
+        levels = re.findall(r"^ *(\d+)\. .*?([\d.]+ [KMGT]?B|\d+ bytes) .*?(Safe|Easy to get back|Your call)",
+                            sample, re.M)
+        self.assertEqual([int(n) for n, _, _ in levels], list(range(1, len(levels) + 1)))
+        order = ["Safe", "Easy to get back", "Your call"]
+        units = {"bytes": 1, "KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3, "TB": 1024 ** 4}
+        sizes = [(order.index(level), -float(s.split()[0]) * units[s.split()[1]]) for _, s, level in levels]
+        self.assertEqual(sizes, sorted(sizes))  # by level, then the larger group first
+        numbers = [int(n) for n in re.findall(r"#(\d+)", sample)]
+        self.assertEqual(numbers, sorted(numbers))
+        self.assertGreater(numbers[0], sum(int(c.replace(",", "")) for c in re.findall(r"([\d,]+) items", sample)[:-1]))
 
     def test_root_readme_row(self):
         text = read(os.path.dirname(PROJECT), "README.md")

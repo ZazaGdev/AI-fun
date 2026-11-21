@@ -10,18 +10,19 @@ only, Python 3.8 or newer.
 
 1. If no path was given (`/disk-cleanup D:\`), ask which drive or folder to scan, suggesting
    `C:\`.
-2. Run `$DC scan "<path>"` in the background, or with a 10-minute timeout: a whole drive can
-   take several minutes. It only reads, writes its two reports to `~/disk-cleanup/`, and prints
-   a summary.
+2. Run `$DC scan '<path>'`, with the path in single quotes (in Git Bash a `"C:\"` never ends),
+   in the background or with a 10-minute timeout: a whole drive can take several minutes. It
+   only reads, writes its two reports to `~/disk-cleanup/`, and prints a summary.
 3. Show the summary exactly as printed, and the path of the full list (its `Full list:` line).
 4. Stop there. Do not ask whether to remove anything, do not offer to, and do not recommend
    removing any group.
 5. Only if the user then asks, in their own words, to remove specific groups or items of this
    report (by number or by name):
-   - Run `$DC clean "<report data>" --groups <numbers or names> --items <numbers>` for exactly
-     those, without `--yes`. `<report data>` is the path on the summary's `Report data:` line.
-     This dry run changes nothing. Show what it printed: what would move, what is left out and
-     why, and any WARNING line.
+   - Run `$DC clean '<report data>' --groups <numbers or names> --items <numbers>` for exactly
+     those, without `--yes`. `<report data>` is the path on the summary's `Report data:` line,
+     and the numbers go comma-separated, such as `--items 412,415`. Run it like the scan, in the
+     background or with a 10-minute timeout. This dry run changes nothing. Show what it printed:
+     what would move, what is left out and why, and any WARNING line.
    - Run the same command with `--yes` only after the user says yes to that dry run. Then report
      what moved, what was left out and why, and where the log is.
    - A Your call group (duplicates, large files) goes by item number only. If the user asks for
