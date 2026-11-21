@@ -1,9 +1,11 @@
 """The command line: the scan command, its reports, the printed summary and the exit codes."""
 import contextlib
+import ctypes
 import glob
 import io
 import json
 import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -51,6 +53,7 @@ class Formats(unittest.TestCase):
         self.assertEqual(dc.scan_root("\\\\?\\C:\\Users"), "C:\\Users")
         self.assertEqual(dc.scan_root("\\\\?\\c:"), "c:\\")
         self.assertEqual(dc.scan_root("\\\\?\\UNC\\server\\share\\x"), "\\\\server\\share\\x")
+        self.assertEqual(dc.scan_root("//?/C:/Users"), "C:\\Users")
         for device in ("\\\\.\\C:", "\\\\.\\PhysicalDrive0", "\\\\?\\Volume{0b5d0c55-1111-2222-3333-444455556666}\\",
                        "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1"):
             self.assertIsNone(dc.scan_root(device), device)
@@ -179,6 +182,25 @@ class ScanCommand(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertNotIn("Scan", out)
         self.assertIn("Cannot write the reports to " + blocker, err)
+
+    def test_a_temp_folder_spelled_with_short_names_still_works(self):
+        # long user names often give %TEMP% an 8.3 short name, such as C:\Users\JOHNSM~1
+        holder = os.path.join(self.pc.base, "A rather long temp folder name")
+        os.makedirs(holder)
+        buf = ctypes.create_unicode_buffer(1024)
+        ctypes.windll.kernel32.GetShortPathNameW(holder, buf, 1024)
+        if "~" not in os.path.basename(buf.value):
+            self.skipTest("8.3 names are switched off on this volume")
+        with mock.patch.object(tempfile, "tempdir", buf.value):
+            pc = PC()
+        try:
+            self.assertNotIn("~", pc.base)
+            code, out, err = run(["scan", pc.C], env=pc.env(), win=FakeWin())
+            self.assertEqual(code, 0, err)
+            self.assertTrue(out.startswith("Scanning %s. This only reads" % pc.C))
+            self.assertNotIn("leads there", out)
+        finally:
+            pc.cleanup()
 
     def test_not_windows_exits_3(self):
         with mock.patch.object(dc.os, "name", "posix"):

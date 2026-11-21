@@ -41,7 +41,8 @@ def tidy(v):
 
 def unnest(cands):
     """Drop repeats and anything inside another candidate; the outer one stays, and on a tie the
-    group that comes first in rules.GROUPS."""
+    group that comes first in rules.GROUPS. A folder listed because it holds a pyvenv.cfg and other
+    files hides nothing: it is never walked, so only separately measured places sit below it."""
     out, kept = [], set()
     for c in sorted(cands, key=lambda c: (len(c["path"]), rules.GROUP_ORDER.index(c["group"]))):
         n = ncase(c["path"])
@@ -50,7 +51,8 @@ def unnest(cands):
             up = os.path.dirname(up)
             inside = up in kept
         if not inside:
-            kept.add(n)
+            if c["skip"] != rules.NOT_ONLY_VENV:
+                kept.add(n)
             out.append(c)
     return out
 
@@ -199,8 +201,14 @@ class Scanner:
         """Size and number of the files in a subtree (links and online-only files not counted, and
         online-only folders never entered), its newest change, and whether it holds links,
         online-only files, unreadable folders or a folder that is never removed. None when `path`
-        itself cannot be read."""
+        itself cannot be read. An online-only `path` is not entered at all."""
         m, stack, top = Measure(), [path], True
+        try:
+            if os.stat(ext(path), follow_symlinks=False).st_file_attributes & PLACEHOLDER:
+                m.online = True
+                return m
+        except OSError:
+            pass
         while stack:
             d = stack.pop()
             entries = self.listing(d, count)

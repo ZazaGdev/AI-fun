@@ -79,7 +79,8 @@ def set_times(path, t):
 
 class PC:
     def __init__(self):
-        self.base = tempfile.mkdtemp(prefix="disk-cleanup-test-")
+        # realpath: %TEMP% may hold an 8.3 short name (C:\Users\JOHNSM~1), which the scan resolves
+        self.base = os.path.realpath(tempfile.mkdtemp(prefix="disk-cleanup-test-"))
         j = os.path.join
         self.C, self.D = j(self.base, "C"), j(self.base, "D")
         self.outside, self.out = j(self.base, "outside"), j(self.base, "out")

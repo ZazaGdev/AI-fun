@@ -446,6 +446,28 @@ class Changes(unittest.TestCase):
         self.assertEqual([rel(self.pc, p) for p in {x["id"]: x for x in r["windows"]}["programs"]["paths"]],
                          ["P\\RealApps"])
 
+    def test_a_pyvenv_cfg_in_the_profile_hides_nothing_measured_on_its_own(self):
+        # python -m venv . typed in a fresh terminal: the profile is listed once and never walked,
+        # but the AppData places, measured on their own, are still offered
+        self.pc.file(U + "pyvenv.cfg", data=b"home = C:\\Python313\n")
+        _, r = run_scan(self.pc, self.pc.C, **SMALL)
+        self.assertTrue({"temp", "browser-cache", "app-cache", "gpu-cache", "crash-dumps", "dev-cache"}
+                        <= {g["id"] for g in r["groups"]})
+        self.assertEqual(skipped(self.pc, r, "py-venv").get(U.rstrip("\\")), rules.NOT_ONLY_VENV)
+        self.assertEqual(sum(s["path"] == self.pc.profile for g in r["groups"] + r["left_out"] for s in g["skipped"]), 1)
+        self.assertIsNone(group(r, "downloads"))  # the profile itself is not walked
+
+    def test_an_online_only_root_is_never_listed(self):
+        old = self.pc.p(U + "OneDrive\\Old")
+        self.pc.set_offline(old)
+        sc = scan.Scanner(self.pc.env(), FakeWin(), old, **SMALL)
+        seen, real = [], sc.listing
+        sc.listing = lambda path, count=True: seen.append(path) or real(path, count)
+        r = sc.run()
+        self.assertNotIn(os.path.normcase(old), [os.path.normcase(p) for p in seen])
+        self.assertEqual([(rel(self.pc, p["path"]), p["size"]) for p in {x["id"]: x for x in r["windows"]}["synced"]["parts"]],
+                         [(U + "OneDrive\\Old", 0)])
+
     def test_a_copy_with_a_name_windows_tools_misread_is_listed_not_offered(self):
         with open(self.pc.p(U + "Pictures\\beach.jpg"), "rb") as f:
             photo = f.read()

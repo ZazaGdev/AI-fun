@@ -278,7 +278,7 @@ def scan_root(path):
         return None
     if re.match(r"^[A-Za-z]:$", path):
         path += "\\"
-    return os.path.abspath(path)
+    return plain(os.path.abspath(path))  # (again: abspath turns //?/C:/x into \\?\C:\x)
 
 
 def cmd_scan(a, env=None, win=None):

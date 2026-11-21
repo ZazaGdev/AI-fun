@@ -71,7 +71,7 @@ class PathForms(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.base = tempfile.mkdtemp(prefix="disk-cleanup-test-")
+        cls.base = os.path.realpath(tempfile.mkdtemp(prefix="disk-cleanup-test-"))  # %TEMP% may hold a short name
         j, b = os.path.join, cls.base
         os.makedirs(j(b, "plain"))
         os.makedirs(j(b, "real"))
@@ -150,7 +150,7 @@ class Calls(unittest.TestCase):
         self.assertTrue(os.path.isdir(winsys.known_folder(winsys.DOWNLOADS)))
 
     def test_long_path_expands_short_names(self):
-        base = tempfile.mkdtemp(prefix="disk-cleanup-test-")
+        base = os.path.realpath(tempfile.mkdtemp(prefix="disk-cleanup-test-"))
         try:
             folder = os.path.join(base, "A folder with a rather long name")
             os.makedirs(folder)
