@@ -78,10 +78,11 @@ def and_list(words):
 
 
 def close_note(g, running):
-    """' (close Chrome first)' when an item's process is running."""
+    """' (skipped while Chrome is open)' when an item's process is running: clean leaves its cache
+    out, and closing the program is up to the user."""
     apps = sorted({rules.PROCESS_NAMES.get(i["process"].lower(), i["process"]) for i in g["items"]
                    if i.get("process") and i["process"].lower() in running})
-    return " (close %s first)" % and_list(apps) if apps else ""
+    return " (skipped while %s %s open)" % (and_list(apps), "is" if len(apps) == 1 else "are") if apps else ""
 
 
 def sets_of(g):
@@ -444,7 +445,9 @@ def cmd_clean(a, env=None, win=None):
     if not a.yes:
         print("\n".join(["Dry run: nothing has been changed.", ""]
                         + moved_lines("Would move to the Recycle Bin:", ok, days, named)
-                        + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
+                        + left_lines(left) + warning_lines(warnings)
+                        + ["", "Dry run: nothing has been changed. Show this to the user. Only if they say yes to it, "
+                               "run the same command with --yes."]))
         return 0
     log = Log(report_path, -(-len(ok) // clean.BATCH))
     if not log.add(["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),

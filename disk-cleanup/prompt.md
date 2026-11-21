@@ -29,7 +29,7 @@ Wherever this prompt says ~, use the full path of my home folder (such as C:\Use
 2. Write FILE 1 to `~/disk-cleanup/tool/disk_cleanup.py`, FILE 2 to `~/disk-cleanup/tool/clean.py`, FILE 3 to `~/disk-cleanup/tool/rules.py`, FILE 4 to `~/disk-cleanup/tool/scan.py` and FILE 5 to `~/disk-cleanup/tool/winsys.py`. Copy the text between each BEGIN line and END line exactly, character for character, without those two lines. Do not shorten, reformat, translate, fix or improve anything. Write each file in one go.
 
 3. Check all five copies by running this:
-   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','7731470f4db31beb082ae0287102632fab806404f004f49e1eea8ea043fda472'),('clean.py','5ef015450aa043dab86fa2684ba76af464f27db7959a8b9066f3cac68c1bac5e'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
+   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','3d15a392d778526b1e7f41f900fc0fb6c8cbb7782d4756e15e2a763f7c5d3144'),('clean.py','7171b05305e40e2174914d13e39374e7b12a8cfc0727f2b833ba00d64abe6696'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
    It must print OK for all five files. If a file prints MISMATCH, write that file again from the text below and run the check again. Only go on when all five say OK.
 
 4. Run the scan, with the path from the first line in single quotes: `python ~/disk-cleanup/tool/disk_cleanup.py scan '<path>'`. Run it in the background or with a 10-minute timeout: a whole drive can take several minutes. It only reads: names, sizes and dates in that folder, and the contents of possible duplicates there to compare them. To know what to leave alone, it also reads where Dropbox, OneDrive and other sync clients keep their folders (Dropbox's info.json and a few Windows registry keys), the names of the folders in my profile and the top of my AppData, the Recycle Bin's settings, and which programs are running. It writes its two reports to ~/disk-cleanup/ and sends nothing anywhere.
@@ -121,10 +121,11 @@ def and_list(words):
 
 
 def close_note(g, running):
-    """' (close Chrome first)' when an item's process is running."""
+    """' (skipped while Chrome is open)' when an item's process is running: clean leaves its cache
+    out, and closing the program is up to the user."""
     apps = sorted({rules.PROCESS_NAMES.get(i["process"].lower(), i["process"]) for i in g["items"]
                    if i.get("process") and i["process"].lower() in running})
-    return " (close %s first)" % and_list(apps) if apps else ""
+    return " (skipped while %s %s open)" % (and_list(apps), "is" if len(apps) == 1 else "are") if apps else ""
 
 
 def sets_of(g):
@@ -487,7 +488,9 @@ def cmd_clean(a, env=None, win=None):
     if not a.yes:
         print("\n".join(["Dry run: nothing has been changed.", ""]
                         + moved_lines("Would move to the Recycle Bin:", ok, days, named)
-                        + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
+                        + left_lines(left) + warning_lines(warnings)
+                        + ["", "Dry run: nothing has been changed. Show this to the user. Only if they say yes to it, "
+                               "run the same command with --yes."]))
         return 0
     log = Log(report_path, -(-len(ok) // clean.BATCH))
     if not log.add(["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
@@ -669,7 +672,7 @@ def select(report, groups, items, skip):
         if g["id"] not in rules.GROUPS:
             raise Refused("%s is not a group this tool offers." % g["id"])
         if rules.GROUPS[g["id"]][1] == "check":
-            raise Refused("Pick the items to remove from this group by number, with --items.")
+            raise Refused("Duplicates and large files go one by one: the user names the item numbers, with --items.")
         chosen.update((i["n"], (g["id"], i)) for i in g["items"] if isinstance(i, dict) and isinstance(i.get("n"), int))
     span = "1 to %d" % max(every) if every else "none"
     for n in items + skip:
@@ -891,7 +894,8 @@ class Checker:
             return NO_RULE
         exe = (t["process"] or "").lower()
         if exe and exe in self.processes:
-            return "close %s first" % rules.PROCESS_NAMES.get(exe, t["process"])
+            return "%s is open, so its cache is left out. Closing it is up to the user." % rules.PROCESS_NAMES.get(
+                exe, t["process"])
         return None
 
     rule_app_cache = rule_gpu_cache = rule_dev_cache = rule_browser_cache

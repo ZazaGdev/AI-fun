@@ -152,7 +152,7 @@ Scan of C:\ finished in 4 min 22 s: 1,412,377 files in 391,250 folders.
 Could be cleaned up: about 43.4 GB in 11 groups.
 
    1. Temporary files older than 7 days          2.1 GB   1,203 items   Safe
-   2. Browser caches                             1.4 GB       9 items   Safe (close Chrome first)
+   2. Browser caches                             1.4 GB       9 items   Safe (skipped while Chrome is open)
    3. Graphics shader caches                   921.6 MB       4 items   Safe
    4. Crash dumps and error reports            310.0 MB      12 items   Safe
    5. Python caches                             38.0 MB     112 items   Safe

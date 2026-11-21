@@ -99,7 +99,7 @@ def select(report, groups, items, skip):
         if g["id"] not in rules.GROUPS:
             raise Refused("%s is not a group this tool offers." % g["id"])
         if rules.GROUPS[g["id"]][1] == "check":
-            raise Refused("Pick the items to remove from this group by number, with --items.")
+            raise Refused("Duplicates and large files go one by one: the user names the item numbers, with --items.")
         chosen.update((i["n"], (g["id"], i)) for i in g["items"] if isinstance(i, dict) and isinstance(i.get("n"), int))
     span = "1 to %d" % max(every) if every else "none"
     for n in items + skip:
@@ -321,7 +321,8 @@ class Checker:
             return NO_RULE
         exe = (t["process"] or "").lower()
         if exe and exe in self.processes:
-            return "close %s first" % rules.PROCESS_NAMES.get(exe, t["process"])
+            return "%s is open, so its cache is left out. Closing it is up to the user." % rules.PROCESS_NAMES.get(
+                exe, t["process"])
         return None
 
     rule_app_cache = rule_gpu_cache = rule_dev_cache = rule_browser_cache

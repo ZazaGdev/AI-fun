@@ -127,7 +127,8 @@ class Refusals(unittest.TestCase):
         self.assertTrue(out.startswith("Dry run: nothing has been changed.\n"))
         self.assertIn("Would move to the Recycle Bin:", out)
         self.assertRegex(out, r"In all: about [\d.]+ KB in \d+ items\.")
-        self.assertTrue(out.rstrip().endswith("To go ahead, run the same command with --yes."))
+        self.assertTrue(out.rstrip().endswith("\n\nDry run: nothing has been changed. Show this to the user. Only if they "
+                                              "say yes to it, run the same command with --yes."))
         self.assertEqual(win.calls, [])
         self.assertEqual(snapshot(self.pc), self.before)
         downloads = number(self.pc, self.report, U + "Downloads\\old-setup.exe")
@@ -142,7 +143,8 @@ class Refusals(unittest.TestCase):
     def test_your_call_groups_are_picked_item_by_item(self):
         for g in ("duplicates", "large-old", str(group_n(self.report, "duplicates"))):
             code, _, err = self.clean("--groups", g)
-            self.assertEqual((code, err.strip()), (2, "Pick the items to remove from this group by number, with --items."), g)
+            self.assertEqual((code, err.strip()), (2, "Duplicates and large files go one by one: the user names the "
+                                                      "item numbers, with --items."), g)
 
     def test_not_offered_groups_are_refused(self):
         for g in ("programs", "synced", "recycle-bin", "windows-temp"):
@@ -255,7 +257,7 @@ class Refusals(unittest.TestCase):
         code, out, _ = run(["clean", self.edited(drop_process), "--groups", "browser-cache"], env=self.pc.env(),
                            win=FakeWin(running={"chrome.exe"}))
         why = left_reasons(out)
-        self.assertEqual({why.get(n) for n in chrome}, {"close Chrome first"})
+        self.assertEqual({why.get(n) for n in chrome}, {"Chrome is open, so its cache is left out. Closing it is up to the user."})
         self.assertTrue(all(why.get(i["n"]) is None for i in g["items"] if "Mozilla" in i["path"]))
 
     def test_recycle_bin_room_warning(self):

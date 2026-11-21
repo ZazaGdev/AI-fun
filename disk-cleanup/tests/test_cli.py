@@ -76,9 +76,9 @@ class Formats(unittest.TestCase):
                          "   1. Temporary files older than 7 days          2.1 GB   1,203 items   Safe")
         g = {"n": 2, "id": "browser-cache", "label": "Browser caches", "safety": "safe", "size": int(1.4 * 1024 ** 3),
              "count": 3, "items": [{"process": "chrome.exe"}, {"process": "msedge.exe"}, {"process": None}]}
-        self.assertEqual(dc.group_line(g, {"chrome.exe"}),
-                         "   2. Browser caches                             1.4 GB       3 items   Safe (close Chrome first)")
-        self.assertTrue(dc.group_line(g, {"chrome.exe", "msedge.exe"}).endswith("(close Chrome and Edge first)"))
+        self.assertEqual(dc.group_line(g, {"chrome.exe"}), "   2. Browser caches                             1.4 GB"
+                                                           "       3 items   Safe (skipped while Chrome is open)")
+        self.assertTrue(dc.group_line(g, {"chrome.exe", "msedge.exe"}).endswith("(skipped while Chrome and Edge are open)"))
 
 
 class ScanCommand(unittest.TestCase):
@@ -102,7 +102,7 @@ class ScanCommand(unittest.TestCase):
                          % self.pc.C)
         self.assertTrue(lines[1].startswith("Scan of %s finished in " % self.pc.C))
         self.assertRegex(out, r"Could be cleaned up: about [\d.]+ KB in 13 groups\.")
-        self.assertIn("Safe (close Chrome first)", out)
+        self.assertIn("Safe (skipped while Chrome is open)", out)
         self.assertIn("Not offered, Windows handles these:", out)
         self.assertIn("Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again.", out)
         self.assertIn("Your call: your own files; only you can tell whether you still need each one.", out)
