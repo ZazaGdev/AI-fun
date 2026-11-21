@@ -53,7 +53,14 @@ def duration(s):
 
 
 def day(ts):
-    return datetime.date.fromtimestamp(ts).isoformat()
+    """The date of a file time. Windows cannot convert times before 1970 or after 3000 the usual way."""
+    try:
+        return datetime.date.fromtimestamp(ts).isoformat()
+    except (OSError, OverflowError, ValueError):
+        try:
+            return (datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=ts)).date().isoformat()
+        except (OverflowError, ValueError):
+            return "unknown date"
 
 
 def and_list(words):
@@ -195,20 +202,31 @@ def cmd_scan(a, env=None, win=None):
         path = os.path.abspath(winsys.long_path(path))
         env = rules.Env.from_system(os.path.abspath(a.out) if a.out else None)
     win = win or winsys.WinSys()
+    try:  # before the scan, so a bad --out does not cost a whole scan
+        os.makedirs(env.out_dir, exist_ok=True)
+    except OSError as e:
+        return cannot_write(env.out_dir, e)
     print("Scanning %s. This only reads; on a whole drive it can take several minutes." % path, flush=True)
     sc = scan.Scanner(env, win, path, workers=a.workers, dupe_min_mb=a.dupe_min_mb, large_mb=a.large_mb,
                       large_days=a.large_days, progress=progress)
     report = sc.run()
-    os.makedirs(env.out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(report["created_ts"]))
     js, txt = (os.path.join(env.out_dir, "scan-%s.%s" % (stamp, x)) for x in ("json", "txt"))
     running = win.processes()
-    with open(js, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=1)
-    with open(txt, "w", encoding="utf-8", errors="replace") as f:
-        f.write(text_report(report, running) + "\n")
+    try:
+        with open(js, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=1)
+        with open(txt, "w", encoding="utf-8", errors="replace") as f:
+            f.write(text_report(report, running) + "\n")
+    except OSError as e:
+        return cannot_write(env.out_dir, e)
     print(summary(report, running, txt, js))
     return 0
+
+
+def cannot_write(folder, err):
+    print("Cannot write the reports to %s: %s" % (folder, err.strerror or err), file=sys.stderr)
+    return 2
 
 
 def not_negative(text):

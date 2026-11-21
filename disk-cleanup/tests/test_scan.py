@@ -25,7 +25,7 @@ class ScanDriveC(unittest.TestCase):
 
     def test_temp_offers_old_children_only(self):
         t = LO + "Temp\\"
-        self.assertEqual(self.paths("temp"), {t + "old.tmp", t + "old-folder", t + "deep-old"})
+        self.assertEqual(self.paths("temp"), {t + "old.tmp", t + "ancient.tmp", t + "old-folder", t + "deep-old"})
         self.assertEqual(skipped(self.pc, self.report, "temp"),
                          {t + "linked-folder": rules.LINKS, t + "online-folder": rules.ONLINE})
         self.assertEqual(group(self.report, "temp")["safety"], "safe")
@@ -71,6 +71,14 @@ class ScanDriveC(unittest.TestCase):
         self.assertEqual(self.paths("dev-cache"), {LO + "npm-cache", U + ".nuget\\packages"})
         self.assertEqual(group(self.report, "dev-cache")["safety"], "redo")
 
+    def test_known_location_behind_a_junction_is_not_offered(self):
+        # .gradle is a junction to a folder outside the scan root: its caches are listed, never measured
+        self.assertEqual(skipped(self.pc, self.report, "dev-cache"), {U + ".gradle\\caches": rules.LINKS})
+        g = group(self.report, "dev-cache")
+        self.assertEqual([s["size"] for s in g["skipped"]], [0])
+        self.assertFalse(any("gradle" in i["path"] for i in all_items(self.report)))
+        self.assertTrue(os.path.exists(self.pc.big_jar))
+
     def test_downloads(self):
         self.assertEqual(self.paths("downloads"), {U + "Downloads\\old-setup.exe", U + "Downloads\\movie.mp4.crdownload"})
         g = group(self.report, "downloads")
@@ -84,6 +92,7 @@ class ScanDriveC(unittest.TestCase):
     def test_never_offered(self):
         never = ["C\\Windows", "C\\Program Files", "C\\ProgramData", "C\\$Windows.~BT", "C\\$Recycle.Bin",
                  LO + "Packages", LO + "Programs", U + ".vscode", U + ".claude", U + "OneDrive", "C\\Users\\other",
+                 U + ".gradle\\caches\\modules-2",
                  "C\\Users\\Public", LO + "Google\\Chrome\\User Data\\System Profile", "outside"]
         listed = [s["path"] for g in self.report["groups"] + self.report["left_out"] for s in g["skipped"]]
         for p in [i["path"] for i in all_items(self.report)] + listed:

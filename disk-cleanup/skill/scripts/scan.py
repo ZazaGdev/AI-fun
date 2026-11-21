@@ -10,7 +10,7 @@ import threading
 import time
 
 import rules
-from rules import PLACEHOLDER, REPARSE, ncase
+from rules import PLACEHOLDER, REPARSE, ext, ncase
 
 MAX_WORKERS = 4
 
@@ -18,17 +18,6 @@ MAX_WORKERS = 4
 def clamp_workers(n):
     """--workers is clamped to 1..4."""
     return max(1, min(MAX_WORKERS, int(n)))
-
-
-def ext(path):
-    """The extended-length form of a full path (\\\\?\\C:\\... or \\\\?\\UNC\\server\\share\\...), so
-    folders deeper than 260 characters read on PCs without long-path support. Only for reading;
-    paths are stored, compared and printed plain."""
-    if path.startswith("\\\\?\\"):
-        return path
-    if path.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + path[2:]
-    return "\\\\?\\" + path
 
 
 def drive_label(root):
@@ -226,20 +215,30 @@ class Scanner:
             return
         self.add(group, path, "dir", m.size, mtime, note, process, m.skip_reason(), project)
 
+    def linked(self, t):
+        """A known location reached through a link (it, or a folder between it and the scan root)
+        is listed as skipped: what is behind the link is not inside the scan root."""
+        if rules.link_between(self.root, t["path"]):
+            self.add(t["group"], t["path"], "dir", 0, 0.0, t["note"], t["process"], rules.LINKS)
+            return True
+        return False
+
     def known(self, t):
         """A known location offered as one folder."""
         try:
+            if self.linked(t):
+                return
             st = os.stat(ext(t["path"]), follow_symlinks=False)
         except OSError:
             return  # not on this PC
-        if st.st_file_attributes & REPARSE:
-            self.add(t["group"], t["path"], "dir", 0, st.st_mtime, t["note"], t["process"], rules.LINKS)
-        elif stat.S_ISDIR(st.st_mode):
+        if stat.S_ISDIR(st.st_mode):
             self.candidate(t["group"], t["path"], st, t["note"], t["process"])
 
     def children(self, t):
         """A known folder whose direct children are offered one by one (temp files, crash dumps)."""
         try:
+            if rules.is_under(t["path"], self.root) and self.linked(t):
+                return
             st = os.stat(ext(t["path"]), follow_symlinks=False)
         except OSError:
             return

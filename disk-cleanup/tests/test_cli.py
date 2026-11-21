@@ -39,6 +39,11 @@ class Formats(unittest.TestCase):
         self.assertEqual(dc.duration(130), "2 min 10 s")
         self.assertEqual(dc.duration(9), "9 s")
 
+    def test_dates_before_1970_and_far_ahead(self):
+        self.assertEqual(dc.day(-315619200), "1960-01-01")
+        self.assertEqual(dc.day(1e13), "unknown date")
+        self.assertRegex(dc.day(33000000000), r"^3015-")
+
     def test_scan_root(self):
         self.assertEqual(dc.scan_root("C:"), "C:\\")
         self.assertEqual(dc.scan_root('C:"'), "C:\\")
@@ -78,7 +83,7 @@ class ScanCommand(unittest.TestCase):
         self.assertIn("Safe (close Chrome first)", out)
         self.assertIn("Not offered, Windows handles these:", out)
         self.assertIn("Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again.", out)
-        self.assertIn("Left out: 1 folder that contains links to other folders (100 bytes).", out)
+        self.assertIn("Left out: 2 folders that contain links to other folders (100 bytes).", out)
         self.assertIn("Left out: 1 folder that holds online-only files (0 bytes).", out)
         self.assertIn("Could not read 1 folder (no permission). They were skipped.", out)
         js = glob.glob(os.path.join(self.pc.out, "scan-*.json"))
@@ -98,6 +103,7 @@ class ScanCommand(unittest.TestCase):
                 self.assertIn("#%d  " % i["n"], text)
                 self.assertIn(i["path"], text)
         self.assertIn("contains online-only files", text)
+        self.assertIn("1960-01-01  " + self.pc.ancient, text)
         self.assertIn(os.path.join(self.pc.C, "Windows", "Minidump"), text)
         self.assertIn(os.path.join(self.pc.profile, "Documents", "locked"), text)
         self.assertNotIn("\u2014", out + text)
@@ -109,6 +115,15 @@ class ScanCommand(unittest.TestCase):
         self.assertEqual(run([], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run(["scan", self.pc.C, "--large-mb", "-1"], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run(["clean-up", "x"], env=self.pc.env(), win=FakeWin())[0], 2)
+
+    def test_report_folder_that_cannot_be_made_exits_2_before_scanning(self):
+        blocker = os.path.join(self.pc.base, "not-a-folder")
+        with open(blocker, "w") as f:
+            f.write("x")
+        code, out, err = run(["scan", self.pc.C], env=self.pc.env(out_dir=blocker), win=FakeWin())
+        self.assertEqual(code, 2)
+        self.assertNotIn("Scan", out)
+        self.assertIn("Cannot write the reports to " + blocker, err)
 
     def test_not_windows_exits_3(self):
         with mock.patch.object(dc.os, "name", "posix"):

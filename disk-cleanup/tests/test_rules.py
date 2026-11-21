@@ -87,6 +87,17 @@ class Areas(unittest.TestCase):
         self.assertFalse(any("Packages" in p or "Spotify" in p or "pnpm" in p or ".m2" in p for p in paths))
         self.assertEqual(len(paths), len(got), "one rule per path")
 
+    def test_link_between(self):
+        C = self.pc.C
+        self.assertTrue(rules.link_between(C, self.pc.p(U + ".gradle\\caches")))
+        self.assertTrue(rules.link_between(C, self.pc.p(U + ".gradle")))
+        self.assertFalse(rules.link_between(C, self.pc.p(LO + "npm-cache")))
+        self.assertFalse(rules.link_between(C, C))
+        # a link above the root is the user's own choice of path: only what is below the root counts
+        self.assertFalse(rules.link_between(self.pc.p(U + ".gradle"), self.pc.p(U + ".gradle\\caches")))
+        with self.assertRaises(OSError):
+            rules.link_between(C, self.pc.p(LO + "no-such-folder\\x"))
+
     def test_chromium_apps(self):
         found = {rel(self.pc, p) for p in rules.chromium_apps(self.env)}
         self.assertEqual(found, {RO + "discord", RO + "UnknownApp", LO + "SomeVendor\\ElectronApp"})

@@ -107,6 +107,28 @@ def is_under(path, prefix):
     return under(ncase(os.path.abspath(path)), ncase(os.path.abspath(prefix)))
 
 
+def ext(path):
+    """The extended-length form of a full path (\\\\?\\C:\\... or \\\\?\\UNC\\server\\share\\...), so
+    folders deeper than 260 characters read on PCs without long-path support. Only for reading;
+    paths are stored, compared and printed plain."""
+    if path.startswith("\\\\?\\"):
+        return path
+    if path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + path[2:]
+    return "\\\\?\\" + path
+
+
+def link_between(root, path):
+    """True when a folder from just below `root` down to `path` itself is a junction, symlink or
+    mount point, so `path` really lives somewhere else. `path` must be inside `root`. Raises
+    OSError when one of those folders is not there."""
+    stop, p, chain = ncase(os.path.abspath(root)), os.path.abspath(path), []
+    while ncase(p) != stop and os.path.dirname(p) != p:
+        chain.append(p)
+        p = os.path.dirname(p)
+    return any(os.stat(ext(q), follow_symlinks=False).st_file_attributes & REPARSE for q in reversed(chain))
+
+
 def unique(paths):
     seen, out = set(), []
     for p in paths:

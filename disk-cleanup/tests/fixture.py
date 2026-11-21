@@ -96,6 +96,7 @@ class PC:
         lo, ro = u + "AppData\\Local\\", u + "AppData\\Roaming\\"
         f, d = self.file, self.dir
         self.precious = f("outside\\precious.txt", data=b"keep me")
+        self.big_jar = f("outside\\gradle-home\\caches\\modules-2\\big.jar", 50 * KB)
         d("out")
 
         # Windows, programs, ProgramData, the drive root's own folders
@@ -117,6 +118,7 @@ class PC:
 
         # the profile's AppData: temp files, crash dumps, caches, programs, packages
         f(lo + "Temp\\old.tmp", KB)
+        self.ancient = f(lo + "Temp\\ancient.tmp")  # dated 1960 below
         f(lo + "Temp\\old-folder\\a.txt", 2 * KB)
         f(lo + "Temp\\new.tmp", KB, age=1)
         f(lo + "Temp\\mixed-folder\\new.txt", KB, age=1)
@@ -231,11 +233,14 @@ class PC:
         # links, an online-only file and a deny rule come after the dates, then the dates of their folders
         self.junction("C\\Users\\you\\code\\linked-app\\node_modules\\outside-link", self.outside)
         self.junction(lo + "Temp\\linked-folder\\outside-link", self.outside)
+        # .gradle moved to another drive and linked back: its caches live outside the scan root
+        self.junction(u + ".gradle", self.p("outside\\gradle-home"))
         online = self.p(lo + "Temp\\online-folder\\cloud.txt")
         ctypes.windll.kernel32.SetFileAttributesW(online, 0x1000)  # FILE_ATTRIBUTE_OFFLINE
         self.deny(self.p(u + "Documents\\locked"))
-        for rel in ("C\\Users\\you\\code\\linked-app\\node_modules", lo + "Temp\\linked-folder"):
+        for rel in ("C\\Users\\you\\code\\linked-app\\node_modules", lo + "Temp\\linked-folder", u.rstrip("\\")):
             self.age(self.p(rel), OLD)
+        os.utime(self.ancient, (-315619200, -315619200))  # 1960-01-01, before what Windows' localtime takes
 
     def age(self, path, days):
         t = self.now - days * DAY
