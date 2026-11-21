@@ -11,6 +11,7 @@ Exit codes: 0 done, 2 bad arguments, 3 not Windows.
 import argparse
 import datetime
 import json
+import math
 import os
 import re
 import sys
@@ -92,10 +93,15 @@ def count_text(g):
     return plural(g["count"], "item")
 
 
+def pad(label, width):
+    """A label padded to its column, with at least two spaces before what follows."""
+    return label + " " * max(2, width - len(label))
+
+
 def group_line(g, running):
     label = SHORT.get(g["id"], g["label"].replace(" (pick the ones to remove)", ""))
-    return "%4d. %-41s%8s   %11s   %s%s" % (g["n"], label, size_text(g["size"]), count_text(g),
-                                           rules.SAFETY[g["safety"]], close_note(g, running))
+    return "%4d. %s%8s   %11s   %s%s" % (g["n"], pad(label, 41), size_text(g["size"]), count_text(g),
+                                         rules.SAFETY[g["safety"]], close_note(g, running))
 
 
 def pick_lines(g):
@@ -147,7 +153,7 @@ def summary(report, running, txt_path, json_path):
     if report["windows"]:
         out += ["", "Not offered, Windows handles these:"]
         for w in report["windows"]:
-            out.append("   %-44s%8s   %s" % (w["label"], size_text(w["size"]), w["tool"]))
+            out.append("   %s%8s   %s" % (pad(w["label"], 44), size_text(w["size"]), w["tool"]))
             out += part_lines(w, PARTS_SHOWN)
     left = left_out_lines(report)
     un = report["unreadable"]
@@ -168,10 +174,13 @@ LEFT_OUT = {rules.LINKS: ("folder that contains links to other folders", "folder
                           "folders that hold a folder this tool never removes"),
             rules.RECENT: ("build folder of a project changed in the last 14 days",
                            "build folders of projects changed in the last 14 days"),
-            rules.RECENT_VENV: ("virtual environment changed in the last 14 days",
-                                "virtual environments changed in the last 14 days"),
-            rules.OUTSIDE: ("virtual environment of a project partly outside the scanned folder",
-                            "virtual environments of projects partly outside the scanned folder")}
+            rules.RECENT_OWN: ("build folder changed in the last 14 days", "build folders changed in the last 14 days"),
+            rules.OUTSIDE: ("build folder of a project partly outside the scanned folder",
+                            "build folders of projects partly outside the scanned folder"),
+            rules.NOT_ONLY_VENV: ("folder with a pyvenv.cfg that also holds other files",
+                                  "folders with a pyvenv.cfg that also hold other files"),
+            rules.ODD: ("item whose name Windows tools cannot handle safely",
+                        "items whose names Windows tools cannot handle safely")}
 
 
 def left_out_lines(report):
@@ -249,22 +258,40 @@ def progress(kind, done, of, seconds):
     print(text, file=sys.stderr, flush=True)
 
 
+def plain(path):
+    """`path` without a \\\\?\\ prefix (\\\\?\\UNC\\ becomes \\\\), or None for a device path such as
+    \\\\.\\C: or \\\\?\\Volume{...}, which has no plain form."""
+    low = path.lower()
+    if low.startswith("\\\\?\\unc\\"):
+        return "\\\\" + path[8:]
+    if low.startswith("\\\\?\\"):
+        path, low = path[4:], low[4:]
+        return path if re.match(r"^[a-z]:(\\|$)", low) else None
+    return None if low.startswith("\\\\.\\") else path
+
+
 def scan_root(path):
-    """The folder to scan as a full path; C: means C:\\. A quoted C:\\ often arrives as C:" ."""
-    path = path.strip().strip('"').strip()
+    """The folder to scan as a full plain path; C: means C:\\. A quoted C:\\ often arrives as C:" .
+    None when it is a device path."""
+    path = plain(path.strip().strip('"').strip())
+    if path is None:
+        return None
     if re.match(r"^[A-Za-z]:$", path):
         path += "\\"
     return os.path.abspath(path)
 
 
 def cmd_scan(a, env=None, win=None):
-    path = scan_root(a.path)
-    if not os.path.isdir(path):
-        print("Not a folder: " + path, file=sys.stderr)
+    given = scan_root(a.path)
+    if given is None:
+        print("Not a folder that can be scanned: " + a.path, file=sys.stderr)
+        return 2
+    path = plain(os.path.realpath(given))  # the real folder, so every area compares as it should
+    if path is None or not os.path.isdir(path):
+        print("Not a folder: " + given, file=sys.stderr)
         return 2
     if env is None:
         winsys.set_low_priority()
-        path = os.path.abspath(winsys.long_path(path))
         env = rules.Env.from_system(os.path.abspath(a.out) if a.out else None)
     win = win or winsys.WinSys()
     try:  # before the scan, so a bad --out does not cost a whole scan
@@ -272,6 +299,8 @@ def cmd_scan(a, env=None, win=None):
     except OSError as e:
         return cannot_write(env.out_dir, e)
     print("Scanning %s. This only reads; on a whole drive it can take several minutes." % path, flush=True)
+    if os.path.normcase(path) != os.path.normcase(given):
+        print("(%s leads there: it is a link or a short name.)" % given, flush=True)
     sc = scan.Scanner(env, win, path, workers=a.workers, dupe_min_mb=a.dupe_min_mb, large_mb=a.large_mb,
                       large_days=a.large_days, progress=progress)
     report = sc.run()
@@ -296,8 +325,8 @@ def cannot_write(folder, err):
 
 def not_negative(text):
     v = float(text)
-    if v < 0:
-        raise argparse.ArgumentTypeError("must be 0 or more")
+    if not math.isfinite(v) or v < 0:
+        raise argparse.ArgumentTypeError("must be a number, 0 or more")
     return v
 
 

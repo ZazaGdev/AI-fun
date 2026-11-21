@@ -18,6 +18,8 @@ BELOW_NORMAL = 0x4000
 DOWNLOADS = "{374DE290-123F-4565-9164-39C4925E467B}"
 BITBUCKET = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume"
 POLICIES = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+SYNC_ROOTS = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager"
+ONEDRIVE = r"Software\Microsoft\OneDrive\Accounts"
 _64 = ctypes.sizeof(ctypes.c_void_p) == 8
 _PACK = 8 if _64 else 1  # shellapi.h packs its structs to 8 bytes on 64-bit Windows and 1 on 32-bit
 
@@ -145,6 +147,74 @@ def recycle_settings(root):
     return {"max_mb": max_mb if isinstance(max_mb, int) else None, "nuke": bool(nuke), "policy": bool(policy)}
 
 
+def _subkeys(reg, hive, key):
+    try:
+        with reg.OpenKey(hive, key) as h:
+            out, i = [], 0
+            while True:
+                try:
+                    out.append(reg.EnumKey(h, i))
+                except OSError:
+                    return out
+                i += 1
+    except OSError:
+        return []
+
+
+def _values(reg, hive, key):
+    """(name, data) of every value of a key; [] when it is not there."""
+    try:
+        with reg.OpenKey(hive, key) as h:
+            out, i = [], 0
+            while True:
+                try:
+                    name, data, _ = reg.EnumValue(h, i)
+                except OSError:
+                    return out
+                out.append((name, data))
+                i += 1
+    except OSError:
+        return []
+
+
+def sync_roots(reg=None):
+    """Folders that sync clients told Windows about: every UserSyncRoots value under
+    SyncRootManager (whatever the user), and every OneDrive account's UserFolder and mount points.
+    Read-only; a missing key is skipped. Tests pass a fake winreg as `reg`."""
+    if reg is None:
+        import winreg as reg
+    out = []
+    for sub in _subkeys(reg, reg.HKEY_LOCAL_MACHINE, SYNC_ROOTS):
+        out += [d for _, d in _values(reg, reg.HKEY_LOCAL_MACHINE, SYNC_ROOTS + "\\" + sub + "\\UserSyncRoots")]
+    for account in _subkeys(reg, reg.HKEY_CURRENT_USER, ONEDRIVE):
+        key = ONEDRIVE + "\\" + account
+        out += [d for n, d in _values(reg, reg.HKEY_CURRENT_USER, key) if n.lower() == "userfolder"]
+        out += [d for _, d in _values(reg, reg.HKEY_CURRENT_USER, key + "\\ScopeIdToMountPointPathCache")]
+    return [p for p in out if isinstance(p, str) and p.strip()]
+
+
+def odd_name(path):
+    """True for a path that Windows tools may read as another one: a \\\\?\\ or \\\\.\\ prefix, a /, a
+    . or .. part, a part ending in a space or a dot, or anything os.path.abspath would change."""
+    if not path or "\0" in path or path.startswith(("\\\\?\\", "\\\\.\\")) or "/" in path:
+        return True
+    if os.path.abspath(path) != path:
+        return True
+    return any(p in (".", "..") or p.endswith((" ", ".")) for p in os.path.splitdrive(path)[1].split("\\") if p)
+
+
+def canonical(path):
+    """True when `path` is the one plain spelling of what it names: not odd_name, no 8.3 short
+    name, and no junction or symlink on the way (its realpath is itself)."""
+    if odd_name(path):
+        return False
+    try:
+        real = os.path.realpath(path)
+    except (OSError, ValueError):
+        return False
+    return os.path.normcase(real) == os.path.normcase(path) and os.path.normcase(long_path(path)) == os.path.normcase(path)
+
+
 def recycle_usage(root):
     """(bytes, items) in the Recycle Bin of the drive at `root`, or (None, None)."""
     info = SHQUERYRBINFO()
@@ -181,10 +251,11 @@ def set_low_priority():
 
 def from_list(paths):
     """The double-null-terminated list SHFileOperationW reads. Refuses anything that is not a
-    plain full path, since the call would read * and ? as wildcards."""
+    plain full path in its one canonical spelling (the call reads * and ? as wildcards, and Win32
+    path rules would turn an odd spelling into another folder), and any drive root."""
     for p in paths:
-        if (not os.path.isabs(p) or p.startswith("\\\\?\\") or any(c in p for c in "*?\0")
-                or os.path.splitdrive(p)[0] == "" or os.path.dirname(p) == p):
+        if (not os.path.isabs(p) or any(c in p for c in "*?\0") or os.path.splitdrive(p)[0] == ""
+                or os.path.dirname(p) == p or not canonical(p)):
             raise ValueError("not a path that can go to the Recycle Bin: %r" % p)
     return "\0".join(paths) + "\0"
 

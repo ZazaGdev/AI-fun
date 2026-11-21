@@ -1,10 +1,12 @@
 """A made-up Windows PC in a temp folder, for the disk-cleanup tests.
 
 Two made-up drives, C and D: a Windows folder, programs, ProgramData, a profile with AppData,
-caches, downloads, pictures, OneDrive, code projects, another user's profile and a game
-library. Everything is 400 days old unless built with another age. A junction points out of
-the scan root to a folder holding precious.txt, and a deny rule stands for access denied.
-cleanup() takes the deny rule and the junctions away, then removes the whole temp folder.
+caches, downloads, pictures, OneDrive, Dropbox, code projects, another user's profile, game
+libraries and sync folders. Everything is 400 days old (modified and created) unless built with
+another age; a few files are created today with an old modified time, as an extracted or copied
+file is. Junctions point out of the scan root to a folder holding precious.txt, and a deny rule
+stands for access denied. cleanup() takes the deny rule and the junctions away, then removes the
+whole temp folder.
 """
 import ctypes
 import os
@@ -22,6 +24,17 @@ import rules  # noqa: E402
 DAY = rules.DAY
 KB = 1024
 OLD = 400
+OFFLINE = 0x1000
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+                             ctypes.c_ulong, ctypes.c_void_p]
+_k32.CreateFileW.restype = ctypes.c_void_p
+_k32.SetFileTime.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_ulonglong)] * 3
+_k32.CloseHandle.argtypes = [ctypes.c_void_p]
+_k32.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong]
+_k32.GetFileAttributesW.argtypes = [ctypes.c_wchar_p]
+_k32.GetFileAttributesW.restype = ctypes.c_ulong
 
 
 class FakeWin:
@@ -47,7 +60,21 @@ class FakeWin:
 
 
 def ext(p):
-    return "\\\\?\\" + os.path.abspath(p)
+    """The \\\\?\\ form of a full path, as is: no abspath, which would drop a trailing space or dot."""
+    return p if p.startswith("\\\\?\\") else "\\\\?\\" + p
+
+
+def set_times(path, t):
+    """Created, accessed and modified time of a file or folder (not following a link)."""
+    h = _k32.CreateFileW(ext(path), 0x100, 7, None, 3, 0x02000000 | 0x00200000, None)  # FILE_WRITE_ATTRIBUTES
+    if h in (None, ctypes.c_void_p(-1).value):
+        raise OSError(ctypes.get_last_error(), "CreateFileW", path)
+    ft = ctypes.c_ulonglong(int((t + 11644473600) * 10 ** 7))
+    try:
+        if not _k32.SetFileTime(h, ctypes.byref(ft), ctypes.byref(ft), ctypes.byref(ft)):
+            raise OSError(ctypes.get_last_error(), "SetFileTime", path)
+    finally:
+        _k32.CloseHandle(h)
 
 
 class PC:
@@ -59,7 +86,7 @@ class PC:
         self.profile = j(self.C, "Users", "you")
         self.local = j(self.profile, "AppData", "Local")
         self.roaming = j(self.profile, "AppData", "Roaming")
-        self.ages, self.junctions, self.denied = {}, [], []
+        self.ages, self.fresh, self.junctions, self.denied, self.offline = {}, set(), [], [], []
         self.now = time.time()
         self.build()
 
@@ -68,18 +95,22 @@ class PC:
     def p(self, *parts):
         return os.path.join(self.base, *parts)
 
-    def file(self, rel, size=100, age=OLD, data=None):
+    def file(self, rel, size=100, age=OLD, data=None, born_today=False):
         path = self.p(rel)
         os.makedirs(os.path.dirname(ext(path)), exist_ok=True)
         with open(ext(path), "wb") as f:
             f.write(data if data is not None else os.urandom(size))
         self.ages[os.path.normcase(path)] = age
+        if born_today:
+            self.fresh.add(os.path.normcase(path))
         return path
 
-    def dir(self, rel, age=OLD):
+    def dir(self, rel, age=OLD, born_today=False):
         path = self.p(rel)
         os.makedirs(ext(path), exist_ok=True)
         self.ages[os.path.normcase(path)] = age
+        if born_today:
+            self.fresh.add(os.path.normcase(path))
         return path
 
     def junction(self, rel, target):
@@ -106,6 +137,8 @@ class PC:
         f("C\\Windows\\System32\\kernel.exe")
         f("C\\Windows\\System32\\kernel.dll")
         f("C\\$Windows.~BT\\Sources\\setup.bin", 2 * KB)
+        f("C\\inetpub\\wwwroot\\iisstart.htm")
+        d("C\\inetpub\\history\\old")
         f("C\\Program Files\\App\\app.exe")
         f("C\\Program Files\\App\\app.dll")
         f("C\\Program Files\\App\\package.json", data=b"{}")
@@ -119,11 +152,17 @@ class PC:
         # the profile's AppData: temp files, crash dumps, caches, programs, packages
         f(lo + "Temp\\old.tmp", KB)
         self.ancient = f(lo + "Temp\\ancient.tmp")  # dated 1960 below
+        f(lo + "Temp\\extracted-today.txt", born_today=True)
         f(lo + "Temp\\old-folder\\a.txt", 2 * KB)
         f(lo + "Temp\\new.tmp", KB, age=1)
         f(lo + "Temp\\mixed-folder\\new.txt", KB, age=1)
         f(lo + "Temp\\linked-folder\\a.txt")
         f(lo + "Temp\\online-folder\\cloud.txt")
+        d(lo + "Temp\\offline-child")
+        f(lo + "Temp\\holds-offline\\x.txt")
+        d(lo + "Temp\\holds-offline\\sub")
+        f(lo + "Temp\\spaced-folder \\a.txt")
+        f(lo + "Temp\\dotted-file.")
         deep = lo + "Temp\\deep-old\\" + "\\".join(["a-folder-name-of-forty-characters-long-x"] * 8)
         self.deep_file = f(deep + "\\deep.txt", 5 * KB)
         f(lo + "Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data\\data_0", 4 * KB)
@@ -168,8 +207,10 @@ class PC:
         f(u + ".claude\\projects\\p\\session.jsonl")
 
         # the user's own folders
+        f(u + "package.json", data=b"{}")  # a stray npm init in the home folder: not a project
         f(u + "Downloads\\old-setup.exe", 6 * KB)
         f(u + "Downloads\\new-setup.msi", 6 * KB, age=2)
+        f(u + "Downloads\\copied-setup.exe", 6 * KB, born_today=True)
         f(u + "Downloads\\movie.mp4.crdownload", 7 * KB, age=10)
         f(u + "Downloads\\fresh.crdownload", KB, age=1)
         f(u + "Downloads\\manual.pdf", 2 * KB)
@@ -183,17 +224,48 @@ class PC:
         cloud = os.urandom(20 * KB)
         f(u + "OneDrive\\photo.jpg", data=cloud)
         f(u + "OneDrive\\Old\\photo.jpg", data=cloud)
+        trip = os.urandom(25 * KB)
+        f(u + "Dropbox (Personal)\\Photos\\trip.jpg", data=trip)
+        f(u + "Dropbox (Personal)\\Photos\\Backup\\trip.jpg", data=trip)
+        d(u + "Dropbox (Personal)\\Team")
+        twin = os.urandom(26 * KB)
+        f(u + "cloudy\\online-dir\\a.jpg", data=twin)  # online-only folder, set below
+        f(u + "cloudy\\online-dir\\b.jpg", data=twin)
         f(u + "Videos\\old-trip.mp4", 300 * KB)
+        f(u + "Videos\\copied-movie.mp4", 300 * KB, born_today=True)
         f(u + "Documents\\report.docx", 2 * KB)
         d(u + "Documents\\old-empty\\inner")
         d(u + "Documents\\new-empty", age=1)
+        d(u + "Documents\\made-today", born_today=True)
         f(u + "Documents\\locked\\secret.txt")
         d(u + "Music")
         f(u + "Desktop\\notes.txt")
-        f(u + "envs\\old-env\\pyvenv.cfg", data=b"home = C:\\Python313\n")
-        f(u + "envs\\old-env\\Lib\\site-packages\\x.py", 2 * KB)
-        f(u + "envs\\new-env\\pyvenv.cfg", data=b"home = C:\\Python313\n")
-        f(u + "envs\\new-env\\Lib\\site-packages\\y.py", 2 * KB, age=3)
+        for env_dir, age in (("old-env", OLD), ("new-env", 3)):
+            f(u + "envs\\%s\\pyvenv.cfg" % env_dir, data=b"home = C:\\Python313\n")
+            f(u + "envs\\%s\\Scripts\\python.exe" % env_dir)
+            f(u + "envs\\%s\\Lib\\site-packages\\x.py" % env_dir, 2 * KB, age=age)
+        # folders with a pyvenv.cfg that hold someone's own files too
+        f(u + "Documents\\thesis-env\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(u + "Documents\\thesis-env\\Scripts\\python.exe")
+        f(u + "Documents\\thesis-env\\Lib\\site-packages\\numpy\\core.py", 2 * KB)
+        f(u + "Documents\\thesis-env\\thesis-final.docx", 9 * KB)
+        f(u + "Documents\\thesis-env\\data\\results.xlsx", 5 * KB)
+        f(u + "pipx\\venvs\\black\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(u + "pipx\\venvs\\black\\pipx_metadata.json", data=b"{}")
+        f(u + "pipx\\venvs\\black\\Scripts\\black.exe")
+        f(u + "pipx\\venvs\\black\\Lib\\site-packages\\black\\__init__.py", 2 * KB)
+        f(u + "Saved Games\\pyvenv.cfg", data=b"home = C:\\Python313\n")  # a shell folder is never offered
+        f(u + "Saved Games\\Scripts\\python.exe")
+        f(u + "Saved Games\\Lib\\site-packages\\s.py")
+        # node_modules folders without a package.json beside them: npm itself, global packages
+        node = u + "scoop\\apps\\nodejs\\20.11.0\\"
+        f(node + "node.exe")
+        f(node + "node_modules\\npm\\package.json", data=b'{"name": "npm"}')
+        f(node + "node_modules\\npm\\lib\\cli.js", 2 * KB)
+        f(node + "node_modules\\npm\\node_modules\\abbrev\\package.json", data=b'{"name": "abbrev"}')
+        f(node + "node_modules\\npm\\node_modules\\abbrev\\index.js", 4 * KB)
+        f(u + "npm-global\\node_modules\\firebase-tools\\package.json", data=b"{}")
+        f(u + "npm-global\\node_modules\\firebase-tools\\node_modules\\express\\index.js", 4 * KB)
 
         # code projects
         c = u + "code\\"
@@ -201,6 +273,9 @@ class PC:
         f(c + "old-app\\index.js")
         f(c + "old-app\\node_modules\\dep\\index.js", 4 * KB)
         f(c + "old-app\\assets\\intro.mp4", 300 * KB)
+        f(c + "copied-app\\package.json", data=b"{}", born_today=True)  # copied in today, old modified times
+        f(c + "copied-app\\index.js", born_today=True)
+        f(c + "copied-app\\node_modules\\dep\\index.js", 4 * KB)
         f(c + "mono\\package.json", data=b"{}")
         f(c + "mono\\node_modules\\dep\\index.js", 4 * KB)
         f(c + "mono\\packages\\a\\package.json", data=b"{}")
@@ -214,6 +289,12 @@ class PC:
         f(c + "dotnet-app\\Program.cs")
         f(c + "dotnet-app\\bin\\Debug\\App.dll", 3 * KB)
         f(c + "dotnet-app\\obj\\project.assets.json", KB)
+        f(c + "sln\\Shop.sln", data=b"Microsoft Visual Studio Solution File")  # committed 8 days ago
+        f(c + "sln\\README.md", age=8)
+        f(c + "sln\\src\\Shop\\Shop.csproj", data=b"<Project/>")
+        f(c + "sln\\src\\Shop\\Program.cs")
+        f(c + "sln\\src\\Shop\\bin\\Debug\\Shop.dll", 3 * KB)
+        f(c + "sln\\src\\Shop\\obj\\project.assets.json", KB)
         f(c + "rust-app\\Cargo.toml", data=b"[package]")
         f(c + "rust-app\\src\\main.rs")
         f(c + "rust-app\\target\\debug\\app.exe", 3 * KB)
@@ -221,8 +302,14 @@ class PC:
         f(c + "py-app\\main.py")
         f(c + "py-app\\__pycache__\\main.cpython-313.pyc", KB)
         f(c + "py-app\\.venv\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(c + "py-app\\.venv\\Scripts\\python.exe")
         f(c + "py-app\\.venv\\Lib\\site-packages\\x.py", 2 * KB)
         f(c + "py-app\\.pytest_cache\\v\\cache\\lastfailed", data=b"{}")
+        f(c + "old-tool\\.git\\HEAD", data=b"ref: refs/heads/main\n")  # python -m venv . run in a repo
+        f(c + "old-tool\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(c + "old-tool\\Scripts\\python.exe")
+        f(c + "old-tool\\Lib\\site-packages\\x.py")
+        f(c + "old-tool\\main.py", 3 * KB)
         img = os.urandom(20 * KB)
         f(c + "repo\\.git\\HEAD", data=b"ref: refs/heads/main\n")
         f(c + "repo\\assets\\a.png", data=img)
@@ -237,6 +324,7 @@ class PC:
         f(c + "hg-site\\copy\\a.jpg", data=hg)
         f(c + "tool-proj\\requirements.txt", data=b"requests\n")
         f(c + "tool-proj\\tools\\venv\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(c + "tool-proj\\tools\\venv\\Scripts\\python.exe")
         f(c + "tool-proj\\tools\\venv\\Lib\\site-packages\\z.py", KB)
 
         # other people's profiles
@@ -244,37 +332,75 @@ class PC:
         f("C\\Users\\other\\Pictures\\x.jpg", 20 * KB)
         f("C\\Users\\Public\\Documents\\shared.txt")
 
-        # drive D: stray installer files in its root, a game, a Steam library
+        # drive D: stray files in its root, games, programs, sync folders, a backup
         f("D\\install.exe")
         f("D\\install.res.1033.dll")
+        f("D\\.git\\HEAD", data=b"ref: refs/heads/main\n")  # a dotfiles repo in the drive root: not a project
         f("D\\Games\\SomeGame\\game.exe")
         f("D\\Games\\SomeGame\\game.dll")
         f("D\\Games\\SomeGame\\data\\big.pak", 300 * KB)
+        movie = os.urandom(27 * KB)
+        sg = "D\\Games\\Shooter\\"
+        f(sg + "Shooter.exe")
+        f(sg + ".egstore\\Shooter.mancpn")
+        f(sg + "Engine\\Binaries\\Win64\\tbb.dll")
+        f(sg + "ShooterGame\\Content\\Movies\\Intro.mp4", data=movie)
+        f(sg + "ShooterGame\\Content\\Movies\\de\\Intro.mp4", data=movie)
+        d(sg + "ShooterGame\\Content\\Mods")
+        f("D\\PostgreSQL\\16\\uninstall-postgresql.exe")
+        d("D\\PostgreSQL\\16\\data\\base\\pgsql_tmp")
+        f("D\\GOGLib\\Witcher\\goggame-1207664643.info", data=b"{}")
+        d("D\\GOGLib\\Witcher\\saves")
+        f("D\\Amazon Games\\Library\\x.dat")
         f("D\\SteamLibrary\\steamapps\\common\\G\\g.exe")
         f("D\\SteamLibrary\\steamapps\\common\\G\\g.dat", 300 * KB)
+        scan_pdf, img1, docx = os.urandom(28 * KB), os.urandom(29 * KB), os.urandom(31 * KB)
+        f("D\\Dropbox\\.dropbox", data=b"{}")
+        f("D\\Dropbox\\scan.pdf", data=scan_pdf)
+        f("D\\Dropbox\\old\\scan.pdf", data=scan_pdf)
+        d("D\\Dropbox\\Clients")
+        f("D\\PhoneSync\\.stfolder\\syncthing-folder-abc.txt")
+        f("D\\PhoneSync\\DCIM\\img1.jpg", data=img1)
+        f("D\\PhoneSync\\DCIM\\sent\\img1.jpg", data=img1)
+        f("D\\WorkCloud\\._sync_4f2a.db")
+        f("D\\WorkCloud\\a.docx", data=docx)
+        f("D\\WorkCloud\\copy\\a.docx", data=docx)
+        backup = os.urandom(32 * KB)
+        f("D\\Backup\\photo.jpg", data=backup)
+        f("D\\Backup\\old\\photo.jpg", data=backup)
 
         self.set_ages()
-        # links, an online-only file and a deny rule come after the dates, then the dates of their folders
+        # links, online-only files and folders, and a deny rule come after the dates, then the dates of their folders
         self.junction("C\\Users\\you\\code\\linked-app\\node_modules\\outside-link", self.outside)
         self.junction(lo + "Temp\\linked-folder\\outside-link", self.outside)
         # .gradle moved to another drive and linked back: its caches live outside the scan root
         self.junction(u + ".gradle", self.p("outside\\gradle-home"))
-        online = self.p(lo + "Temp\\online-folder\\cloud.txt")
-        ctypes.windll.kernel32.SetFileAttributesW(online, 0x1000)  # FILE_ATTRIBUTE_OFFLINE
+        for rel in (lo + "Temp\\online-folder\\cloud.txt", lo + "Temp\\offline-child", lo + "Temp\\holds-offline\\sub",
+                    u + "cloudy\\online-dir"):
+            self.set_offline(self.p(rel))
         self.deny(self.p(u + "Documents\\locked"))
         for rel in ("C\\Users\\you\\code\\linked-app\\node_modules", lo + "Temp\\linked-folder", u.rstrip("\\")):
             self.age(self.p(rel), OLD)
         os.utime(self.ancient, (-315619200, -315619200))  # 1960-01-01, before what Windows' localtime takes
 
     def age(self, path, days):
-        t = self.now - days * DAY
-        os.utime(ext(path), (t, t))
+        set_times(path, self.now - days * DAY)
 
     def set_ages(self):
         for top, dirs, files in os.walk(ext(self.base)):
             for name in dirs + files:
                 full = os.path.join(top, name)[4:]
-                self.age(full, self.ages.get(os.path.normcase(full), OLD))
+                n = os.path.normcase(full)
+                t = self.now - self.ages.get(n, OLD) * DAY
+                if n in self.fresh:
+                    os.utime(ext(full), (t, t))  # modified long ago, created today
+                else:
+                    set_times(full, t)
+
+    def set_offline(self, path):
+        a = _k32.GetFileAttributesW(ext(path))
+        _k32.SetFileAttributesW(ext(path), (a & 0x10) | OFFLINE)  # keep FILE_ATTRIBUTE_DIRECTORY
+        self.offline.append(path)
 
     def deny(self, path):
         sid = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True,
@@ -305,5 +431,7 @@ class PC:
                 os.rmdir(link)  # removes the link only, never what it points to
         for top, dirs, files in os.walk(ext(self.base)):
             for name in files:
-                ctypes.windll.kernel32.SetFileAttributesW(os.path.join(top, name), 0x80)
+                _k32.SetFileAttributesW(os.path.join(top, name), 0x80)
+            for name in dirs:
+                _k32.SetFileAttributesW(os.path.join(top, name), 0x10)
         shutil.rmtree(ext(self.base))

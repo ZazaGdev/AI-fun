@@ -48,6 +48,22 @@ class Formats(unittest.TestCase):
         self.assertEqual(dc.scan_root("C:"), "C:\\")
         self.assertEqual(dc.scan_root('C:"'), "C:\\")
         self.assertEqual(dc.scan_root(' "D:\\" '), "D:\\")
+        self.assertEqual(dc.scan_root("\\\\?\\C:\\Users"), "C:\\Users")
+        self.assertEqual(dc.scan_root("\\\\?\\c:"), "c:\\")
+        self.assertEqual(dc.scan_root("\\\\?\\UNC\\server\\share\\x"), "\\\\server\\share\\x")
+        for device in ("\\\\.\\C:", "\\\\.\\PhysicalDrive0", "\\\\?\\Volume{0b5d0c55-1111-2222-3333-444455556666}\\",
+                       "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1"):
+            self.assertIsNone(dc.scan_root(device), device)
+
+    def test_labels_never_run_into_their_size(self):
+        g = {"n": 1, "id": "x", "label": "A label far longer than the column it is printed in", "safety": "safe",
+             "size": 92, "count": 1, "items": []}
+        self.assertIn("printed in  92 bytes", dc.group_line(g, set()))
+        report = {"root": "C:\\", "stats": {"files": 1, "folders": 1, "seconds": 1}, "groups": [], "left_out": [],
+                  "windows": [{"id": "synced", "label": rules.NOT_OFFERED["synced"][0], "size": 92,
+                               "tool": rules.NOT_OFFERED["synced"][1], "paths": ["C:\\x"]}],
+                  "unreadable": {"count": 0, "denied": 0, "examples": []}}
+        self.assertIn("Google Drive)  92 bytes   Removing", dc.summary(report, set(), "a.txt", "a.json"))
 
     def test_group_line_matches_the_plan(self):
         g = {"n": 1, "id": "temp", "label": "Temporary files older than 7 days", "safety": "safe",
@@ -93,9 +109,11 @@ class ScanCommand(unittest.TestCase):
         self.assertRegex(out, r"Installed programs and games +\d+ bytes   Settings > Apps > Installed apps.*\n"
                               r" +\d+ bytes  .*\\C\\Program Files\n")
         self.assertIn("Left out: 3 folders that contain links to other folders (4 KB).", out)
-        self.assertIn("Left out: 2 build folders of projects changed in the last 14 days (8 KB).", out)
-        self.assertIn("Left out: 1 virtual environment changed in the last 14 days (2 KB).", out)
-        self.assertIn("Left out: 1 folder that holds online-only files (0 bytes).", out)
+        self.assertIn("Left out: 5 build folders of projects changed in the last 14 days (16 KB).", out)
+        self.assertIn("Left out: 1 build folder changed in the last 14 days (2 KB).", out)
+        self.assertIn("Left out: 3 folders that hold online-only files (100 bytes).", out)
+        self.assertIn("Left out: 3 folders with a pyvenv.cfg that also hold other files (0 bytes).", out)
+        self.assertIn("Left out: 2 items whose names Windows tools cannot handle safely (200 bytes).", out)
         self.assertIn("Could not read 1 folder (no permission). They were skipped.", out)
         js = glob.glob(os.path.join(self.pc.out, "scan-*.json"))
         txt = glob.glob(os.path.join(self.pc.out, "scan-*.txt"))
@@ -129,7 +147,29 @@ class ScanCommand(unittest.TestCase):
         self.assertEqual(run(["scan"], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run([], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run(["scan", self.pc.C, "--large-mb", "-1"], env=self.pc.env(), win=FakeWin())[0], 2)
+        for flag, value in (("--dupe-min-mb", "nan"), ("--large-mb", "inf"), ("--large-days", "nan"),
+                            ("--large-days", "-inf"), ("--large-mb", "lots")):
+            self.assertEqual(run(["scan", self.pc.C, flag, value], env=self.pc.env(), win=FakeWin())[0], 2, value)
+        self.assertEqual(run(["scan", "\\\\.\\C:"], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run(["clean-up", "x"], env=self.pc.env(), win=FakeWin())[0], 2)
+
+    def test_a_root_spelled_another_way_scans_the_real_folder(self):
+        def items(argv_root):
+            code, out, err = run(["scan", argv_root, "--dupe-min-mb", "0.01"], env=self.pc.env(), win=FakeWin())
+            self.assertEqual(code, 0, err)
+            js = max(glob.glob(os.path.join(self.pc.out, "scan-*.json")), key=os.path.getmtime)
+            with open(js, encoding="utf-8") as f:
+                r = json.load(f)
+            os.remove(js)  # the fixture's own report folder
+            return out, sorted((g["id"], i["path"]) for g in r["groups"] for i in g["items"])
+        plain_out, plain = items(self.pc.profile)
+        link = self.pc.junction("P\\home", self.pc.profile)
+        for spelled in (link, "\\\\?\\" + self.pc.profile):
+            out, got = items(spelled)
+            self.assertEqual(got, plain, spelled)
+            self.assertTrue(out.startswith("Scanning %s. This only reads" % self.pc.profile), spelled)
+        self.assertIn("(%s leads there: it is a link or a short name.)" % link, items(link)[0])
+        self.assertNotIn("leads there", plain_out)
 
     def test_report_folder_that_cannot_be_made_exits_2_before_scanning(self):
         blocker = os.path.join(self.pc.base, "not-a-folder")

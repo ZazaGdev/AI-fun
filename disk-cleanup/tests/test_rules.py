@@ -1,5 +1,8 @@
 """Locations, path comparison, areas and the known-location rule tables."""
+import json
 import os
+import shutil
+import tempfile
 import time
 import unittest
 
@@ -52,9 +55,35 @@ class Areas(unittest.TestCase):
         self.assertEqual(self.kind(c + "py-app\\.venv\\Lib"), rules.INSIDE)
         self.assertEqual(self.kind(c + "py-app\\__pycache__"), rules.INSIDE)
         self.assertIsNone(self.kind(c + "py-app\\.venv"))  # the walk itself finds pyvenv.cfg in it
-        kind, projects = rules.context(self.env, self.pc.p(c + "mono\\packages\\a\\src"))
-        self.assertIsNone(kind)
+        kind, projects, stop = rules.context(self.env, self.pc.p(c + "mono\\packages\\a\\src"))
+        self.assertEqual((kind, stop), (None, None))
         self.assertEqual([rel(self.pc, p) for p in projects], [c + "mono", c + "mono\\packages\\a"])
+
+    def test_context_says_where_it_stopped(self):
+        c = U + "code\\"
+        stop = lambda p: rel(self.pc, rules.context(self.env, self.pc.p(p))[2])  # noqa: E731
+        self.assertEqual(stop(c + "old-app\\node_modules"), c + "old-app\\node_modules")  # the item itself
+        self.assertEqual(stop(c + "old-app\\node_modules\\dep"), c + "old-app\\node_modules")
+        self.assertEqual(stop(c + "py-app\\.venv\\Lib\\site-packages"), c + "py-app\\.venv")
+        self.assertEqual(stop("D\\Games\\SomeGame\\data"), "D\\Games\\SomeGame")
+        self.assertEqual(stop(U + "OneDrive\\Old"), U + "OneDrive")
+        # a node_modules with no package.json beside it is never walked, so nothing below it is offered
+        npm = U + "scoop\\apps\\nodejs\\20.11.0\\node_modules"
+        self.assertEqual(rules.context(self.env, self.pc.p(npm + "\\npm\\node_modules"))[0], rules.INSIDE)
+        self.assertEqual(stop(npm + "\\npm\\node_modules"), npm)
+
+    def test_context_of_synced_venv_like_and_online_only_folders(self):
+        self.assertEqual(rules.context(self.env, self.pc.p("D\\PhoneSync\\DCIM"))[::2],
+                         (rules.SYNCED, self.pc.p("D\\PhoneSync")))
+        self.assertEqual(self.kind("D\\WorkCloud\\copy"), rules.SYNCED)
+        self.assertEqual(self.kind(U + "Dropbox (Personal)\\Photos"), rules.SYNCED)
+        self.assertEqual(self.kind(U + "Documents\\thesis-env\\data"), rules.SKIP)
+        self.assertEqual(self.kind(U + "cloudy\\online-dir"), rules.SKIP)
+        self.assertEqual(self.kind("D\\Games\\Shooter\\ShooterGame\\Content"), rules.PROGRAM)
+        self.assertEqual(self.kind("D\\PostgreSQL\\16\\data"), rules.PROGRAM)
+        self.assertEqual(self.kind("C\\inetpub\\history"), rules.WINDOWS)
+        self.assertEqual(rules.context(self.env, self.pc.p(U + "Pictures"))[1], ())  # the stray package.json
+        self.assertEqual(rules.context(self.env, self.pc.p("D\\Backup"))[1], ())  # the dotfiles .git
 
     def test_context(self):
         self.assertIsNone(self.kind("C"))
@@ -77,16 +106,18 @@ class Areas(unittest.TestCase):
     def test_names_that_are_never_walked(self):
         k = lambda p, name, root=False: rules.dir_kind(self.env, p, name, root, False, False)  # noqa: E731
         for name in ("Program Files", "program files (x86)", "steamapps", "SteamLibrary", "Epic Games", "GOG Games",
-                     "XboxGames", "Riot Games", "EA Games", "Ubisoft Game Launcher"):
+                     "XboxGames", "Riot Games", "EA Games", "Ubisoft Game Launcher", "Amazon Games"):
             self.assertEqual(k("X:\\stuff\\" + name, name), rules.PROGRAM, name)
         self.assertEqual(k("X:\\Backup\\Users\\old\\AppData", "AppData"), rules.APPDATA)
         self.assertEqual(k("X:\\Windows", "Windows", True), rules.WINDOWS)
+        self.assertEqual(k("X:\\inetpub", "inetpub", True), rules.WINDOWS)
         self.assertEqual(k("X:\\ProgramData", "ProgramData", True), rules.APPDATA)
         self.assertIsNone(k("X:\\Projects\\Windows", "Windows"))
+        self.assertIsNone(k("X:\\Projects\\inetpub", "inetpub"))
 
-    def test_onedrive_named_folders_in_the_profile_are_synced(self):
-        self.assertEqual(rules.dir_kind(self.env, self.pc.p(U + "OneDrive - Contoso"), "OneDrive - Contoso",
-                                        False, True, False), rules.SYNCED)
+    def test_onedrive_and_dropbox_named_folders_in_the_profile_are_synced(self):
+        for name in ("OneDrive - Contoso", "Dropbox (Personal)", "Dropbox (Team)"):
+            self.assertEqual(rules.dir_kind(self.env, self.pc.p(U + name), name, False, True, False), rules.SYNCED)
         self.assertIsNone(rules.dir_kind(self.env, self.pc.p(U + "code\\OneDrive"), "OneDrive", False, False, False))
 
     def test_protected(self):
@@ -159,9 +190,48 @@ class PatternRules(unittest.TestCase):
         for name in ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"):
             self.assertEqual(b(name, set(), set()), ("py-cache", ""))
 
+    def test_virtual_environment_parts(self):
+        v = rules.venv_only
+        self.assertTrue(v({"pyvenv.cfg"}, {"lib", "scripts", "include"}))
+        self.assertTrue(v({"pyvenv.cfg", ".gitignore", "cachedir.tag"}, {"lib", "lib64", "bin", "share"}))
+        self.assertFalse(v({"pyvenv.cfg"}, {"lib"}))  # no Scripts or bin
+        self.assertFalse(v({"pyvenv.cfg", "main.py"}, {"lib", "scripts"}))
+        self.assertFalse(v({"pyvenv.cfg", "pipx_metadata.json"}, {"lib", "scripts"}))
+        self.assertFalse(v({"pyvenv.cfg"}, {"lib", "scripts", ".git"}))
+        self.assertFalse(v({"pyvenv.cfg"}, {"lib", "scripts", "src"}))  # pip install -e git+... clones into src
+
+    def test_sync_markers(self):
+        s = rules.is_synced_root
+        for files, dirs in [({".dropbox"}, set()), (set(), {".dropbox.cache"}), (set(), {".stfolder"}),
+                            (set(), {".sync"}), (set(), {".debris"}), ({".owncloudsync.log"}, set()),
+                            (set(), {".tmp.drivedownload"}), ({"._sync_4f2a.db"}, set()), ({".sync_9.db"}, set())]:
+            self.assertTrue(s(files, dirs), (files, dirs))
+        self.assertFalse(s({"sync.db", "notes.txt"}, {"sync"}))
+
+    def test_dropbox_folders(self):
+        base = tempfile.mkdtemp(prefix="disk-cleanup-test-")
+        try:
+            good, bad = os.path.join(base, "info.json"), os.path.join(base, "bad.json")
+            with open(good, "w", encoding="utf-8") as f:
+                json.dump({"personal": {"path": "C:\\Users\\you\\Dropbox", "host": 1},
+                           "business": {"path": "D:\\Dropbox (Team)"}, "other": "x"}, f)
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.assertEqual(sorted(rules.dropbox_folders([good, bad, os.path.join(base, "missing.json")])),
+                             ["C:\\Users\\you\\Dropbox", "D:\\Dropbox (Team)"])
+        finally:
+            shutil.rmtree(base)
+
     def test_programs_and_projects(self):
-        self.assertTrue(rules.holds_program({"game.exe", "engine.dll"}))
-        self.assertFalse(rules.holds_program({"setup.exe", "notes.txt"}))
+        p = rules.holds_program
+        self.assertTrue(p({"game.exe", "engine.dll"}, set()))
+        self.assertFalse(p({"setup.exe", "notes.txt"}, set()))
+        self.assertTrue(p({"shooter.exe"}, {"engine", "shootergame"}))  # Unreal: the .dll files sit in Engine
+        self.assertFalse(p({"readme.txt"}, {"engine"}))
+        self.assertTrue(p(set(), {".egstore", "content"}))  # Epic's install record
+        self.assertTrue(p({"goggame-1207664643.info"}, set()))
+        for name in ("unins000.exe", "uninstall-postgresql.exe", "uninst.exe", "Uninstall.exe".lower()):
+            self.assertTrue(p({name}, set()), name)
         for files, dirs in [({"package.json"}, set()), ({"app.sln"}, set()), ({"x.uproject"}, set()),
                             ({"requirements.txt"}, set()), (set(), {".git"}), ({".git"}, set()),
                             (set(), {".hg"}), (set(), {".svn"}),

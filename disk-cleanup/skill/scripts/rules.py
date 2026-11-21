@@ -4,8 +4,13 @@ Env holds the locations, read once from the environment. The rest is the rule ta
 areas the scan never offers anything from, the groups it may offer with how safe each one
 is, and the Windows-managed places it only lists, with the Windows tool to use instead.
 """
+import fnmatch
+import json
 import os
 import re
+
+import winsys
+from winsys import odd_name  # noqa: F401  (the scan and clean use it from here)
 
 DAY = 86400.0
 MB = 1024 * 1024
@@ -42,18 +47,28 @@ ONLINE = "contains online-only files"
 PARTLY = "parts of it could not be read"
 HOLDS = "holds a folder this tool never removes"
 RECENT = "project changed in the last 14 days"
-RECENT_VENV = "changed in the last 14 days"
+RECENT_OWN = "changed in the last 14 days"
 OUTSIDE = "its project is partly outside the scanned folder"
+NOT_ONLY_VENV = "holds files that are not part of a virtual environment"
+ODD = "its name is one Windows tools cannot handle safely"
 
 # what the walker does with a folder it meets, besides walking it
 SKIP, WINDOWS, PROGRAM, APPDATA, SYNCED, DOT, KNOWN = "skip", "windows", "program", "appdata", "synced", "dot", "known"
 INSIDE = "inside"  # it is, or is inside, something a pattern rule offers as one item
 
 ROOT_SKIP = {"$recycle.bin", "system volume information", "recovery", "config.msi", "$winreagent", "$sysreset"}
+ROOT_WINDOWS = {"windows", "inetpub"}  # Windows-managed when directly in a drive root
 VCS = {".git", ".hg", ".svn"}
 OLD_WINDOWS = ("Windows.old", "$Windows.~BT", "$Windows.~WS")
 PROGRAM_NAMES = {"program files", "program files (x86)", "steamapps", "steamlibrary", "epic games", "gog games",
-                 "xboxgames", "riot games", "ea games", "ubisoft game launcher"}
+                 "xboxgames", "riot games", "ea games", "ubisoft game launcher", "amazon games"}
+UNINSTALLERS = ("unins*.exe", "uninst*.exe", "uninstall*.exe")
+# what a folder of a sync client holds directly (Dropbox, Syncthing, Resilio, MEGA, ownCloud, Google Drive)
+SYNC_MARKERS = {".dropbox", ".dropbox.cache", ".stfolder", ".sync", ".debris", ".owncloudsync.log",
+                ".tmp.drivedownload", ".tmp.driveupload"}
+SYNC_DBS = (".sync_*.db", "._sync_*.db")  # Nextcloud and ownCloud
+VENV_FILES = {"pyvenv.cfg", ".gitignore", "cachedir.tag", ".lock", "pip-selfcheck.json", "selfcheck.json"}
+VENV_DIRS = {"lib", "lib64", "scripts", "bin", "include", "share", "etc", "man"}
 # sync clients' default folders in the profile; besides the plan's four, the defaults of Google Drive's
 # mirror mode, Box, Nextcloud, MEGA and Syncthing, left out because removing there removes everywhere
 SYNCED_NAMES = ("Dropbox", "iCloudDrive", "iCloud Photos", "Google Drive", "My Drive", "Box", "Nextcloud", "MEGA", "Sync")
@@ -173,14 +188,36 @@ def unique(paths):
     return out
 
 
+def birth(st):
+    """When a file or folder was made: st_birthtime where Python has it, else st_ctime, which is
+    the creation time on Windows."""
+    return getattr(st, "st_birthtime", st.st_ctime)
+
+
 def subdirs(path):
-    """Names of the folders directly in `path`, links left out; [] when it cannot be read."""
+    """Names of the folders directly in `path`, links and online-only folders left out; [] when it
+    cannot be read."""
     try:
         with os.scandir(path) as it:
             return [e.name for e in it if e.is_dir(follow_symlinks=False)
-                    and not e.stat(follow_symlinks=False).st_file_attributes & REPARSE]
+                    and not e.stat(follow_symlinks=False).st_file_attributes & (REPARSE | PLACEHOLDER)]
     except OSError:
         return []
+
+
+def dropbox_folders(info_files):
+    """The folder of every Dropbox account named in Dropbox's info.json files. Read-only; a missing
+    file or bad JSON is skipped."""
+    out = []
+    for f in info_files:
+        try:
+            with open(f, encoding="utf-8") as h:
+                data = json.load(h)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            out += [a["path"] for a in data.values() if isinstance(a, dict) and isinstance(a.get("path"), str)]
+    return out
 
 
 def names(path):
@@ -244,7 +281,8 @@ class Env:
         self.n_temps = {n(p) for p in self.temps}
         # folders never offered themselves, and a candidate holding one is skipped instead (HOLDS)
         self.never = (self.n_appdata | self.n_windows | self.n_programs | self.n_synced | self.n_temps
-                      | self.n_profiles | self.n_profiles_dirs | {x for x in (self.n_downloads, self.n_out) if x})
+                      | self.n_profiles | self.n_profiles_dirs | self.n_shell
+                      | {x for x in (self.n_downloads, self.n_out) if x})
 
     def is_root(self, n):
         """`n` (through ncase) is a drive root."""
@@ -277,9 +315,11 @@ class Env:
         system_drive = (e("SystemDrive") or os.path.splitdrive(system_root)[0]) + "\\"
         synced = [full(e(v)) for v in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")]
         try:
-            synced += [j(profile, x) for x in os.listdir(profile) if x.lower().startswith("onedrive")]
+            synced += [j(profile, x) for x in os.listdir(profile) if x.lower().startswith(("onedrive", "dropbox"))]
         except OSError:
             pass
+        synced += [full(p) for p in winsys.sync_roots()]
+        synced += [full(p) for p in dropbox_folders([j(roaming, "Dropbox", "info.json"), j(local, "Dropbox", "info.json")])]
         return cls(profile=profile, local=local, roaming=roaming, locallow=j(profile, "AppData", "LocalLow"),
                    temps=[full(e("TEMP")), full(e("TMP")), j(local, "Temp")],
                    downloads=full(winsys.known_folder(winsys.DOWNLOADS)) or j(profile, "Downloads"),
@@ -293,19 +333,19 @@ class Env:
 def dir_kind(env, path, name, at_root, at_profile, at_profiles):
     """What the walker does with folder `path` (called `name`), from its name and place alone.
     at_root, at_profile, at_profiles: its parent is a drive root, the profile, the profiles folder.
-    None means walk it. Besides the plan's areas, any folder named AppData and a Windows or
-    ProgramData folder at any drive root (an old system disk) are left alone too."""
+    None means walk it. Besides the plan's areas, any folder named AppData and a Windows,
+    inetpub or ProgramData folder at any drive root (an old system disk) are left alone too."""
     n, low = ncase(path), name.lower()
     if ((at_root and low in ROOT_SKIP) or n == env.n_out or low in VCS
             or (at_profiles and n not in env.n_profiles)):
         return SKIP
-    if n in env.n_windows or (at_root and low == "windows"):
+    if n in env.n_windows or (at_root and low in ROOT_WINDOWS):
         return WINDOWS
     if n in env.n_programs or low in PROGRAM_NAMES:
         return PROGRAM
     if n in env.n_appdata or low == "appdata" or (at_root and low == "programdata"):
         return APPDATA
-    if n in env.n_synced or (at_profile and low.startswith("onedrive")):
+    if n in env.n_synced or (at_profile and low.startswith(("onedrive", "dropbox"))):
         return SYNCED
     if (at_root or at_profile) and low.startswith("."):
         return DOT
@@ -314,11 +354,25 @@ def dir_kind(env, path, name, at_root, at_profile, at_profiles):
     return None
 
 
-def holds_program(files):
-    """At least one .exe and one .dll among the lower-case file names directly in a folder: an
-    installed or portable program."""
+def holds_program(files, dirs):
+    """An installed or portable program, from the lower-case names directly in a folder: an .exe
+    with a .dll or with an Engine folder (Unreal), an uninstaller, an .egstore folder (Epic), or a
+    goggame-*.info file (GOG)."""
     exts = {os.path.splitext(f)[1] for f in files}
-    return ".exe" in exts and ".dll" in exts
+    exe = ".exe" in exts
+    return ((exe and (".dll" in exts or "engine" in dirs)) or ".egstore" in dirs
+            or any(fnmatch.fnmatch(f, p) for f in files for p in UNINSTALLERS + ("goggame-*.info",)))
+
+
+def venv_only(files, dirs):
+    """A folder holding pyvenv.cfg is a virtual environment to offer only when it holds nothing
+    but the parts of one, with its Scripts or bin folder."""
+    return files <= VENV_FILES and dirs <= VENV_DIRS and bool(dirs & {"scripts", "bin"})
+
+
+def is_synced_root(files, dirs):
+    """A folder a sync client keeps, known by the marker it holds directly."""
+    return bool((files | dirs) & SYNC_MARKERS) or any(fnmatch.fnmatch(f, p) for f in files for p in SYNC_DBS)
 
 
 def is_project(files, dirs):
@@ -363,26 +417,34 @@ def chain(env, path):
 
 def context(env, path):
     """How the walker treats folder `path`, worked out from its drive root down the way the walk
-    would meet it. Returns (kind, projects): kind None when it is walked, else the area it is in;
-    projects are the folders above it that start project areas."""
+    would meet it. Returns (kind, projects, stop): kind None when it is walked, else the area it is
+    in; projects are the folders above it that start project areas; stop is the folder the area
+    starts at (for INSIDE, the item a rule offers whole, which may be `path` itself)."""
     folders, projects = chain(env, path), ()
     for parent, p in zip(folders, folders[1:]):
         np = ncase(parent)
         files, dirs = names(parent)
         at_root, at_profile = env.is_root(np), np in env.n_profiles
-        if holds_program(files) and not (at_root or at_profile):
-            return PROGRAM, projects
+        if is_synced_root(files, dirs):
+            return SYNCED, projects, parent
+        if holds_program(files, dirs) and not (at_root or at_profile):
+            return PROGRAM, projects, parent
         if "pyvenv.cfg" in files:
-            return INSIDE, projects
-        if is_project(files, dirs):
+            return (INSIDE if venv_only(files, dirs) else SKIP), projects, parent
+        if is_project(files, dirs) and not (at_root or at_profile):
             projects += (parent,)
         name = os.path.basename(p)
         kind = dir_kind(env, p, name, at_root, at_profile, np in env.n_profiles_dirs)
         if kind:
-            return kind, projects
-        if build_rule(name, files, dirs):
-            return INSIDE, projects
-    return None, projects
+            return kind, projects, p
+        try:
+            if os.stat(ext(p), follow_symlinks=False).st_file_attributes & PLACEHOLDER:
+                return SKIP, projects, p  # online-only: the walk never enters it
+        except OSError:
+            pass
+        if build_rule(name, files, dirs) or name.lower() == "node_modules":
+            return INSIDE, projects, p
+    return None, projects, None
 
 
 def protected(env, path):
@@ -456,12 +518,12 @@ def known_targets(env):
         for prof in subdirs(ud):
             low = prof.lower()
             if low == "default" or low.startswith("profile ") or low == "guest profile":
-                out += [target("browser-cache", j(ud, prof, c), "%s, %s profile" % (app, prof), exe) for c in APP_CACHES]
+                out += [target("browser-cache", j(ud, prof, c), "%s, %s" % (app, prof), exe) for c in APP_CACHES]
         out += [target("browser-cache", j(ud, c), app, exe) for c in ("ShaderCache", "GrShaderCache", "GraphiteDawnCache")]
     out += [target("browser-cache", j(env.local, sub, "Cache"), app, "opera.exe") for sub, app in OPERA]
     ff = j(env.local, "Mozilla", "Firefox", "Profiles")
     for prof in subdirs(ff):
-        out += [target("browser-cache", j(ff, prof, c), "Firefox, %s profile" % prof, "firefox.exe")
+        out += [target("browser-cache", j(ff, prof, c), "Firefox, %s" % prof, "firefox.exe")
                 for c in ("cache2", "startupCache")]
     for b, sub, app, exe, extra in APPS:
         out += [target("app-cache", j(base[b], sub, c), app, exe) for c in APP_CACHES + extra]

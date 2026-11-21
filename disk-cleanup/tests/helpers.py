@@ -11,7 +11,10 @@ def run_scan(pc, root, env=None, win=None, **kw):
 
 
 def rel(pc, path):
-    return os.path.relpath(path, pc.base)
+    """`path` relative to the made-up PC, as is (relpath would drop a trailing space or dot)."""
+    base = pc.base.rstrip("\\") + "\\"
+    assert os.path.normcase(path).startswith(os.path.normcase(base)), path
+    return path[len(base):]
 
 
 def group(report, gid):
