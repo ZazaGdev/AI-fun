@@ -29,7 +29,7 @@ Wherever this prompt says ~, use the full path of my home folder (such as C:\Use
 2. Write FILE 1 to `~/disk-cleanup/tool/disk_cleanup.py`, FILE 2 to `~/disk-cleanup/tool/clean.py`, FILE 3 to `~/disk-cleanup/tool/rules.py`, FILE 4 to `~/disk-cleanup/tool/scan.py` and FILE 5 to `~/disk-cleanup/tool/winsys.py`. Copy the text between each BEGIN line and END line exactly, character for character, without those two lines. Do not shorten, reformat, translate, fix or improve anything. Write each file in one go.
 
 3. Check all five copies by running this:
-   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','494bba335750c1e7674b04773671ac16270d3b2592832522f2ddb2f046d125ce'),('clean.py','c28ebf42324680c2c5524794d66f1fcc12cca9b1f296ef08c22933bd1eb4655a'),('rules.py','762a78e8d8f32c230491f1313b30b99003208e4cc05f7efcd54ee1740e9abf66'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
+   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','cfcdae608f3b9449073815dcf03e774b842ae791d3bb3d37ce82a429f1ef7276'),('clean.py','c28ebf42324680c2c5524794d66f1fcc12cca9b1f296ef08c22933bd1eb4655a'),('rules.py','762a78e8d8f32c230491f1313b30b99003208e4cc05f7efcd54ee1740e9abf66'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
    It must print OK for all five files. If a file prints MISMATCH, write that file again from the text below and run the check again. Only go on when all five say OK.
 
 4. Run the scan, with the path from the first line in single quotes: `python ~/disk-cleanup/tool/disk_cleanup.py scan '<path>'`. Run it in the background or with a 10-minute timeout: a whole drive can take several minutes. It only reads: names, sizes and dates in that folder, and the contents of possible duplicates there to compare them. To know what to leave alone, it also reads where Dropbox, OneDrive and other sync clients keep their folders (Dropbox's info.json and a few Windows registry keys), the names of the folders in my profile and the top of my AppData, the Recycle Bin's settings, and which programs are running. It writes its two reports to ~/disk-cleanup/ and sends nothing anywhere.
@@ -381,17 +381,26 @@ def cannot_write(folder, err):
 
 # ---- clean ----
 
-def moved_lines(head, entries, days):
-    """Per group, what moves (or would), then the total."""
+def moved_lines(head, entries, days, named=(), shown=PICK_SHOWN):
+    """Per group, what moves (or would), then the total. Under each group its items as `#n  size
+    path`: every item named with --items, and of the rest (a group named whole) the first `shown`,
+    then `and N more`; shown None lists them all."""
     if not entries:
         return [head, "   Nothing."]
     by = {}
-    for e in entries:  # (group, item, size, identity)
-        n, s = by.get(e[0], (0, 0))
-        by[e[0]] = (n + 1, s + e[2])
+    for e in entries:  # (group, item, size, identity, ...)
+        by.setdefault(e[0], []).append(e)
     out = [head]
-    out += ["   %s%8s   %s" % (pad(short_label(gid, rules.label(gid, days)), 44), size_text(by[gid][1]),
-                               plural(by[gid][0], "item")) for gid in rules.GROUP_ORDER if gid in by]
+    for gid in (g for g in rules.GROUP_ORDER if g in by):
+        es = by[gid]
+        out.append("   %s%8s   %s" % (pad(short_label(gid, rules.label(gid, days)), 44), size_text(sum(e[2] for e in es)),
+                                      plural(len(es), "item")))
+        rest = [e for e in es if e[1]["n"] not in named]
+        cut = {id(e) for e in (rest if shown is None else rest[:shown])}
+        out += ["      #%d  %s  %s" % (e[1]["n"], size_text(e[2]), e[1]["path"]) for e in es
+                if e[1]["n"] in named or id(e) in cut]
+        if len(rest) > len(cut):
+            out.append("      and %s more" % num(len(rest) - len(cut)))
     out.append("   In all: about %s in %s." % (size_text(sum(e[2] for e in entries)), plural(len(entries), "item")))
     return out
 
@@ -424,8 +433,7 @@ def write_log(report_path, moved, left, warnings, days):
     path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
     lines = ["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
              "Report: " + report_path, ""]
-    lines += moved_lines("Moved to the Recycle Bin:", moved, days)
-    lines += ["   %s  %s" % (size_text(e[2]), e[1]["path"]) for e in moved]
+    lines += moved_lines("Moved to the Recycle Bin:", moved, days, shown=None)
     lines += left_lines(left, shown=None) + warning_lines(warnings)
     try:
         with open(path, "w", encoding="utf-8", errors="replace") as f:
@@ -464,14 +472,16 @@ def cmd_clean(a, env=None, win=None):
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
     days = clean.setting(report, "large_days", 180)
+    named = set(items)  # listed one by one in what clean prints; a group named whole shows its first 10
     if not a.yes:
-        print("\n".join(["Dry run: nothing has been changed.", ""] + moved_lines("Would move to the Recycle Bin:", ok, days)
+        print("\n".join(["Dry run: nothing has been changed.", ""]
+                        + moved_lines("Would move to the Recycle Bin:", ok, days, named)
                         + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
         return 0
     moved, failed = clean.move(ok, win)
     left += failed
     log, err = write_log(report_path, moved, left, warnings, days)
-    out = moved_lines("Moved to the Recycle Bin:", moved, days) + left_lines(left) + warning_lines(warnings)
+    out = moved_lines("Moved to the Recycle Bin:", moved, days, named) + left_lines(left) + warning_lines(warnings)
     out += ["", "The space comes back when you empty the Recycle Bin. Until then you can restore anything from it."]
     out.append("The log of this run: " + log if log else "Could not write the log: %s" % (err.strerror or err))
     print("\n".join(out))

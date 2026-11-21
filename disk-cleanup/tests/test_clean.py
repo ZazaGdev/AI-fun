@@ -6,6 +6,7 @@ import glob
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -294,6 +295,47 @@ class Moves(unittest.TestCase):
             text = f.read()
         for p in want:
             self.assertIn(p, text)
+
+    def test_what_clean_prints_names_each_item_so_a_new_report_shows_its_own_files(self):
+        # item numbers are positions in one report: after a new scan the same numbers name other files
+        js, first = scan_report(self.pc)
+        first_js = save(first, os.path.join(self.pc.out, "first-report.json"))
+        large = next(g for g in first["groups"] if g["id"] == "large-old")["items"][-1]
+        copies = [i for g in first["groups"] if g["id"] == "duplicates" for i in g["items"] if not i["suggest_keep"]]
+        picks = [i["n"] for i in [large] + copies]
+        out1, _ = self.clean(first_js, "--items", ",".join(map(str, picks)))
+        for i in [large] + copies:
+            self.assertIn("\n      #%d  %s  %s\n" % (i["n"], dc.size_text(i["size"]), i["path"]), out1)
+        self.pc.age(self.pc.file(LO + "Temp\\crossed-7-days.tmp", KB), 8)  # a day later: one more temp file
+        js, second = scan_report(self.pc)
+        out2, win = self.clean(js, "--items", ",".join(map(str, picks)))
+        self.assertNotEqual(out1, out2)  # the dry run the user says yes to shows the other files
+        now = {i["n"]: i for g in second["groups"] for i in g["items"]}
+        for n in picks:
+            self.assertIn("\n      #%d  %s  %s\n" % (n, dc.size_text(now[n]["size"]), now[n]["path"]), out2)
+        self.assertEqual(win.calls, [])
+
+    def test_a_group_named_whole_shows_its_first_ten_and_the_log_lists_all(self):
+        for k in range(12):
+            self.pc.age(self.pc.file(LO + "Temp\\many-%02d.tmp" % k, KB), 400)
+        js, report = scan_report(self.pc)
+        dup = next(i for g in report["groups"] if g["id"] == "duplicates" for i in g["items"]
+                   if rel(self.pc, i["path"]) == U + "Pictures\\Backup\\beach.jpg")
+        for args in ([], ["--yes"]):
+            out, win = self.clean(js, "--groups", "temp", "--items", str(dup["n"]), *args)
+            m = re.search(r"\n   Temporary files older than 7 days +\S+ \S+ +(\d+) items\n((?:      .*\n)*)", out)
+            rows = m.group(2).splitlines()
+            self.assertEqual(len(rows), 11, out)
+            self.assertTrue(all(re.match(r"      #\d+  \S+ \S+  .+\\Temp\\", r) for r in rows[:10]), rows)
+            self.assertEqual(rows[10], "      and %d more" % (int(m.group(1)) - 10))
+            self.assertIn("\n      #%d  20 KB  %s\n" % (dup["n"], dup["path"]), out)  # named with --items
+        log = out.rstrip().splitlines()[-1].split(": ", 1)[1]
+        with open(log, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotRegex(text, r"and \d+ more")
+        for p in win.moved:
+            item = next(i for g in report["groups"] for i in g["items"] if i["path"] == p)
+            self.assertIn("\n      #%d  %s  %s\n" % (item["n"], dc.size_text(item["size"]), p), text)
 
     def test_every_copy_picked_keeps_one(self):
         js, report = scan_report(self.pc)
