@@ -54,6 +54,7 @@ class Formats(unittest.TestCase):
         self.assertEqual(dc.scan_root("\\\\?\\c:"), "c:\\")
         self.assertEqual(dc.scan_root("\\\\?\\UNC\\server\\share\\x"), "\\\\server\\share\\x")
         self.assertEqual(dc.scan_root("//?/C:/Users"), "C:\\Users")
+        self.assertEqual(dc.scan_root("//?/C:"), "C:\\")
         for device in ("\\\\.\\C:", "\\\\.\\PhysicalDrive0", "\\\\?\\Volume{0b5d0c55-1111-2222-3333-444455556666}\\",
                        "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1"):
             self.assertIsNone(dc.scan_root(device), device)

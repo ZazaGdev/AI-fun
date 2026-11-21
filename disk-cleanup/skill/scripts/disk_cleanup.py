@@ -266,7 +266,9 @@ def plain(path):
         return "\\\\" + path[8:]
     if low.startswith("\\\\?\\"):
         path, low = path[4:], low[4:]
-        return path if re.match(r"^[a-z]:(\\|$)", low) else None
+        if re.match(r"^[a-z]:$", low):
+            return path + "\\"  # a bare X: would mean the current folder on that drive
+        return path if re.match(r"^[a-z]:\\", low) else None
     return None if low.startswith("\\\\.\\") else path
 
 
