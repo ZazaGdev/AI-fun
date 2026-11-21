@@ -1,20 +1,25 @@
 """The scan on a made-up PC: every offered group finds its items and nothing else, protected
 places are never offered, links are never followed and an unreadable folder does not stop it."""
+import msvcrt
 import os
 import time
 import unittest
+from unittest import mock
 
 from fixture import KB, PC, FakeWin
 from helpers import LO, RO, U, all_items, group, item_paths, rel, run_scan, skipped
 import rules
 import scan
 
+SMALL = dict(dupe_min_mb=0.01, large_mb=0.2)  # 10 KB and 200 KB, so the fixture can stay small
+CODE = U + "code\\"
+
 
 class ScanDriveC(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.pc = PC()
-        cls.sc, cls.report = run_scan(cls.pc, cls.pc.C, win=FakeWin(bin_size=5 * KB, bin_items=2))
+        cls.sc, cls.report = run_scan(cls.pc, cls.pc.C, win=FakeWin(bin_size=5 * KB, bin_items=2), **SMALL)
 
     @classmethod
     def tearDownClass(cls):
@@ -59,8 +64,7 @@ class ScanDriveC(unittest.TestCase):
             RO + "discord\\Cache", RO + "discord\\Code Cache", RO + "discord\\GPUCache",
             RO + "UnknownApp\\Cache", RO + "UnknownApp\\Code Cache", RO + "UnknownApp\\GPUCache",
             LO + "SomeVendor\\ElectronApp\\Code Cache", LO + "SomeVendor\\ElectronApp\\GPUCache"})
-        g = group(self.report, "app-cache")
-        by = {rel(self.pc, i["path"]): i for i in g["items"]}
+        by = {rel(self.pc, i["path"]): i for i in group(self.report, "app-cache")["items"]}
         self.assertEqual(by[RO + "discord\\Cache"]["process"], "Discord.exe")
         self.assertEqual((by[RO + "UnknownApp\\GPUCache"]["note"], by[RO + "UnknownApp\\GPUCache"]["process"]),
                          ("UnknownApp", None))
@@ -74,8 +78,7 @@ class ScanDriveC(unittest.TestCase):
     def test_known_location_behind_a_junction_is_not_offered(self):
         # .gradle is a junction to a folder outside the scan root: its caches are listed, never measured
         self.assertEqual(skipped(self.pc, self.report, "dev-cache"), {U + ".gradle\\caches": rules.LINKS})
-        g = group(self.report, "dev-cache")
-        self.assertEqual([s["size"] for s in g["skipped"]], [0])
+        self.assertEqual([s["size"] for s in group(self.report, "dev-cache")["skipped"]], [0])
         self.assertFalse(any("gradle" in i["path"] for i in all_items(self.report)))
         self.assertTrue(os.path.exists(self.pc.big_jar))
 
@@ -85,15 +88,69 @@ class ScanDriveC(unittest.TestCase):
         self.assertEqual(g["safety"], "redo")
         self.assertTrue(all(i["kind"] == "file" for i in g["items"]))
 
+    def test_node_modules_by_project_age(self):
+        self.assertEqual(self.paths("build-node"), {CODE + "old-app\\node_modules"})
+        # the monorepo's only recent change is inside one of its packages: its node_modules stays
+        self.assertEqual(skipped(self.pc, self.report, "build-node"), {
+            CODE + "new-app\\node_modules": rules.RECENT, CODE + "mono\\node_modules": rules.RECENT,
+            CODE + "linked-app\\node_modules": rules.LINKS})
+        g = group(self.report, "build-node")
+        self.assertEqual((g["safety"], g["note"]), ("redo", "npm install brings it back."))
+
+    def test_other_build_output(self):
+        self.assertEqual(self.paths("build-output"), {CODE + "dotnet-app\\bin", CODE + "dotnet-app\\obj",
+                                                      CODE + "rust-app\\target"})
+        notes = {rel(self.pc, i["path"]): i["note"] for i in group(self.report, "build-output")["items"]}
+        self.assertEqual(notes[CODE + "dotnet-app\\bin"], ".NET build output (bin)")
+        self.assertEqual(notes[CODE + "rust-app\\target"], "Rust build output (target)")
+
+    def test_python_caches_and_virtual_environments(self):
+        self.assertEqual(self.paths("py-cache"), {CODE + "py-app\\__pycache__", CODE + "py-app\\.pytest_cache"})
+        self.assertEqual(group(self.report, "py-cache")["safety"], "safe")
+        self.assertEqual(self.paths("py-venv"), {CODE + "py-app\\.venv", U + "envs\\old-env"})
+        self.assertEqual(skipped(self.pc, self.report, "py-venv"), {U + "envs\\new-env": rules.RECENT_VENV})
+        g = group(self.report, "py-venv")
+        self.assertEqual((g["safety"], g["note"]),
+                         ("redo", "Reinstall packages with pip install -r requirements.txt."))
+
+    def test_duplicates_are_listed_copy_by_copy(self):
+        g = group(self.report, "duplicates")
+        self.assertEqual(g["safety"], "check")
+        self.assertEqual([rel(self.pc, i["path"]) for i in g["items"]],
+                         [U + "Pictures\\beach.jpg", U + "Downloads\\beach (1).jpg", U + "Pictures\\Backup\\beach.jpg"])
+        self.assertEqual([i["suggest_keep"] for i in g["items"]], [True, False, False])
+        self.assertEqual({i["set"] for i in g["items"]}, {1})
+        self.assertEqual(len({i["hash"] for i in g["items"]}), 1)
+        self.assertEqual(len(g["items"][0]["hash"]), 64)
+        first = g["items"][0]
+        self.assertEqual(sorted(first["same_as"]), sorted(i["path"] for i in g["items"][1:]))
+        self.assertEqual((g["size"], g["count"]), (2 * 20 * KB, 3))
+
+    def test_duplicates_never_hard_links_projects_or_synced_folders(self):
+        paths = item_paths(self.pc, self.report, "duplicates")
+        for p in paths:
+            self.assertFalse("hard" in p or "OneDrive" in p or "code" in p, p)
+
+    def test_large_old_files(self):
+        self.assertEqual(self.paths("large-old"), {U + "Videos\\old-trip.mp4", CODE + "old-app\\assets\\intro.mp4"})
+        g = group(self.report, "large-old")
+        self.assertEqual(g["safety"], "check")
+        self.assertTrue(all(i["kind"] == "file" and i["size"] == 300 * KB for i in g["items"]))
+
+    def test_empty_folders(self):
+        # nested old empty folders: only the top one; Music is a shell folder; new-empty is too new
+        self.assertEqual(self.paths("empty"), {U + "Documents\\old-empty"})
+        self.assertEqual(group(self.report, "empty")["safety"], "safe")
+
     def test_only_these_groups(self):
-        self.assertEqual({g["id"] for g in self.report["groups"]},
-                         {"temp", "crash-dumps", "browser-cache", "app-cache", "gpu-cache", "dev-cache", "downloads"})
+        self.assertEqual({g["id"] for g in self.report["groups"]}, set(rules.GROUPS))
 
     def test_never_offered(self):
         never = ["C\\Windows", "C\\Program Files", "C\\ProgramData", "C\\$Windows.~BT", "C\\$Recycle.Bin",
                  LO + "Packages", LO + "Programs", U + ".vscode", U + ".claude", U + "OneDrive", "C\\Users\\other",
-                 U + ".gradle\\caches\\modules-2",
-                 "C\\Users\\Public", LO + "Google\\Chrome\\User Data\\System Profile", "outside"]
+                 "C\\Users\\Public", LO + "Google\\Chrome\\User Data\\System Profile", "outside",
+                 U + ".gradle\\caches\\modules-2", CODE + "repo", U + "Pictures\\hard1.jpg", U + "Pictures\\hard2.jpg",
+                 U + "Music", U + "Documents\\new-empty", U + "Documents\\locked"]
         listed = [s["path"] for g in self.report["groups"] + self.report["left_out"] for s in g["skipped"]]
         for p in [i["path"] for i in all_items(self.report)] + listed:
             r = rel(self.pc, p)
@@ -103,16 +160,18 @@ class ScanDriveC(unittest.TestCase):
             self.assertNotIn("Local Storage", r)
 
     def test_precious_is_never_counted(self):
-        # the junction in the temp folder is not followed: its folder holds only a.txt (100 bytes)
-        temp = next(g for g in self.report["groups"] if g["id"] == "temp")
-        linked = next(s for s in temp["skipped"] if s["path"].endswith("linked-folder"))
-        self.assertEqual(linked["size"], 100)
+        # the junctions are not followed: the temp folder holding one has only a.txt (100 bytes),
+        # the node_modules holding the other only index.js (4 KB)
+        sizes = {rel(self.pc, s["path"]): s["size"] for g in self.report["groups"] + self.report["left_out"]
+                 for s in g["skipped"]}
+        self.assertEqual(sizes[LO + "Temp\\linked-folder"], 100)
+        self.assertEqual(sizes[CODE + "linked-app\\node_modules"], 4 * KB)
         self.assertTrue(os.path.exists(self.pc.precious))
 
     def test_not_offered_list(self):
         w = {x["id"]: x for x in self.report["windows"]}
         self.assertEqual(set(w), {"recycle-bin", "windows-update", "windows-temp", "system-dumps", "system-wer",
-                                  "old-windows", "thumbnails", "inet-cache"})
+                                  "old-windows", "thumbnails", "inet-cache", "programs", "synced"})
         self.assertEqual(w["recycle-bin"]["size"], 5 * KB)
         self.assertEqual(w["windows-update"]["size"], 2 * KB)
         self.assertEqual(w["system-dumps"]["size"], 3 * KB)
@@ -120,6 +179,15 @@ class ScanDriveC(unittest.TestCase):
         self.assertEqual(w["old-windows"]["size"], 2 * KB)
         self.assertEqual(w["thumbnails"]["size"], KB)
         self.assertEqual(w["inet-cache"]["tool"], "Disk Cleanup (run cleanmgr), Temporary Internet Files")
+
+    def test_programs_and_synced_folders_are_only_listed(self):
+        w = {x["id"]: x for x in self.report["windows"]}
+        self.assertEqual({rel(self.pc, p["path"]) for p in w["programs"]["parts"]},
+                         {"C\\Program Files", "C\\Program Files (x86)", LO + "Programs"})
+        self.assertEqual(w["programs"]["size"], sum(p["size"] for p in w["programs"]["parts"]))
+        self.assertEqual([(rel(self.pc, p["path"]), p["size"]) for p in w["synced"]["parts"]],
+                         [(U + "OneDrive", 40 * KB)])
+        self.assertTrue(w["synced"]["tool"].startswith("Removing files here removes them on your other devices too."))
 
     def test_access_denied_folder_is_counted_and_the_scan_finishes(self):
         un = self.report["unreadable"]
@@ -135,19 +203,20 @@ class ScanDriveC(unittest.TestCase):
         self.assertEqual(nums, list(range(1, len(nums) + 1)))
         for g in groups:
             sizes = [i["size"] for i in g["items"]]
-            self.assertEqual(sizes, sorted(sizes, reverse=True))
-            self.assertEqual(g["size"], sum(sizes))
             self.assertEqual(g["count"], len(sizes))
+            if g["id"] != "duplicates":
+                self.assertEqual(sizes, sorted(sizes, reverse=True))
+                self.assertEqual(g["size"], sum(sizes))
 
     def test_report_shape(self):
         r = self.report
         self.assertEqual((r["tool"], r["version"]), ("disk-cleanup", 1))
         self.assertEqual(r["root"], self.pc.C)
         self.assertEqual(r["profile"], self.pc.profile)
-        self.assertEqual(r["settings"], {"dupe_min_mb": 1, "large_mb": 500, "large_days": 180})
+        self.assertEqual(r["settings"], {"dupe_min_mb": 0.01, "large_mb": 0.2, "large_days": 180})
         self.assertLess(abs(r["created_ts"] - time.time()), 600)
         item = all_items(r)[0]
-        self.assertEqual(list(item)[:6], ["n", "path", "kind", "size", "mtime", "note"])
+        self.assertEqual(list(item)[:7], ["n", "path", "kind", "size", "mtime", "note", "process"])
 
     def test_four_worker_threads(self):
         self.assertEqual(len(self.sc.threads), 4)
@@ -163,9 +232,9 @@ class ScanOtherRoots(unittest.TestCase):
         cls.pc.cleanup()
 
     def test_one_worker_finds_the_same(self):
-        _, a = run_scan(self.pc, self.pc.C, workers=1)
-        _, b = run_scan(self.pc, self.pc.C, workers=4)
-        strip = lambda r: sorted((g["id"], sorted(i["path"] for i in g["items"])) for g in r["groups"])  # noqa: E731
+        _, a = run_scan(self.pc, self.pc.C, workers=1, **SMALL)
+        _, b = run_scan(self.pc, self.pc.C, workers=4, **SMALL)
+        strip = lambda r: sorted((g["id"], [i["path"] for i in g["items"]]) for g in r["groups"])  # noqa: E731
         self.assertEqual(strip(a), strip(b))
 
     def test_workers_are_clamped(self):
@@ -174,27 +243,54 @@ class ScanOtherRoots(unittest.TestCase):
         sc, _ = run_scan(self.pc, self.pc.D, workers=2)
         self.assertEqual(len(sc.threads), 2)
 
+    def test_hashing_uses_the_same_number_of_threads(self):
+        seen = []
+        real = scan.ThreadPoolExecutor
+
+        def pool(max_workers):
+            seen.append(max_workers)
+            return real(max_workers=max_workers)
+        with mock.patch.object(scan, "ThreadPoolExecutor", pool):
+            run_scan(self.pc, self.pc.C, workers=3, **SMALL)
+        self.assertEqual(seen, [3])
+
     def test_root_inside_appdata_measures_known_places_only(self):
-        _, r = run_scan(self.pc, self.pc.local)
+        _, r = run_scan(self.pc, self.pc.local, **SMALL)
         ids = {g["id"] for g in r["groups"]}
         self.assertTrue({"temp", "browser-cache", "gpu-cache", "crash-dumps"} <= ids)
-        self.assertNotIn("downloads", ids)
-        self.assertNotIn("recycle-bin", {w["id"] for w in r["windows"]})
-        self.assertEqual(r["stats"]["files"] > 0, True)
+        self.assertFalse(ids & {"downloads", "build-node", "duplicates", "large-old", "empty"})
+        w = {x["id"]: x for x in r["windows"]}
+        self.assertNotIn("recycle-bin", w)
+        self.assertEqual([rel(self.pc, p) for p in w["programs"]["paths"]], [LO + "Programs"])
 
     def test_root_inside_windows_offers_nothing(self):
-        _, r = run_scan(self.pc, os.path.join(self.pc.C, "Windows"))
+        _, r = run_scan(self.pc, os.path.join(self.pc.C, "Windows"), **SMALL)
         self.assertEqual(r["groups"], [])
         self.assertEqual({w["id"] for w in r["windows"]}, {"windows-update", "windows-temp", "system-dumps"})
 
     def test_another_users_profile_is_not_read(self):
-        _, r = run_scan(self.pc, os.path.join(self.pc.C, "Users", "other"))
+        _, r = run_scan(self.pc, os.path.join(self.pc.C, "Users", "other"), **SMALL)
         self.assertEqual((r["groups"], r["stats"]["files"]), ([], 0))
 
-    def test_drive_d_offers_nothing_yet_and_reads_no_link(self):
-        _, r = run_scan(self.pc, self.pc.D)
+    def test_drive_d_lists_its_game_folders_and_offers_nothing(self):
+        _, r = run_scan(self.pc, self.pc.D, **SMALL)
         self.assertEqual(r["groups"], [])
-        self.assertEqual([w["id"] for w in r["windows"]], ["recycle-bin"])
+        w = {x["id"]: x for x in r["windows"]}
+        self.assertEqual(set(w), {"recycle-bin", "programs"})
+        # the stray .exe and .dll in the drive root do not make the whole drive a program
+        self.assertEqual({rel(self.pc, p) for p in w["programs"]["paths"]}, {"D\\Games\\SomeGame", "D\\SteamLibrary"})
+
+    def test_root_inside_a_program_folder(self):
+        _, r = run_scan(self.pc, os.path.join(self.pc.D, "Games", "SomeGame", "data"), **SMALL)
+        self.assertEqual(r["groups"], [])
+        self.assertEqual([rel(self.pc, p) for p in {x["id"]: x for x in r["windows"]}["programs"]["paths"]],
+                         ["D\\Games\\SomeGame\\data"])
+
+    def test_root_that_is_or_is_inside_a_rule_target_offers_nothing(self):
+        for root in (CODE + "old-app\\node_modules", CODE + "old-app\\node_modules\\dep", CODE + "py-app\\.venv",
+                     CODE + "py-app\\.venv\\Lib", CODE + "dotnet-app\\bin\\Debug"):
+            _, r = run_scan(self.pc, self.pc.p(root), **SMALL)
+            self.assertEqual(r["groups"], [], root)
 
     def test_temp_pointing_at_a_drive_root_is_not_used(self):
         # (a TEMP not named like a temp folder is refused too; see test_rules, since this fixture
@@ -222,7 +318,50 @@ class ScanOtherRoots(unittest.TestCase):
         sc.plan = plan
         sc.run()
         self.assertTrue(seen)
-        self.assertEqual(len(seen[0]), 3)
+        self.assertEqual((seen[0][0], len(seen[0])), ("walk", 4))
+
+
+class Changes(unittest.TestCase):
+    """Cases that change the made-up PC for one test, each on a PC of its own."""
+
+    def setUp(self):
+        self.pc = PC()
+
+    def tearDown(self):
+        self.pc.cleanup()
+
+    def test_downloads_holding_a_program_is_a_program(self):
+        self.pc.file(U + "Downloads\\helper.dll")
+        _, r = run_scan(self.pc, self.pc.C, **SMALL)
+        self.assertIsNone(group(r, "downloads"))
+        programs = {x["id"]: x for x in r["windows"]}["programs"]["paths"]
+        self.assertIn(U + "Downloads", {rel(self.pc, p) for p in programs})
+        self.assertNotIn(U + "Downloads\\beach (1).jpg", item_paths(self.pc, r, "duplicates"))
+
+    def test_a_locked_copy_drops_out_of_its_set(self):
+        path = self.pc.p(U + "Pictures\\Backup\\beach.jpg")
+        f = open(path, "r+b")
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 20 * KB)
+            _, r = run_scan(self.pc, self.pc.C, **SMALL)
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 20 * KB)
+        finally:
+            f.close()
+        self.assertEqual(item_paths(self.pc, r, "duplicates"), {U + "Pictures\\beach.jpg", U + "Downloads\\beach (1).jpg"})
+
+    def test_the_real_place_of_a_linked_program_folder_is_protected(self):
+        # Program Files is reached through a junction; scanning the drive it really lives on must not
+        # walk it as the user's own files
+        self.pc.file("P\\RealApps\\tool\\data.iso", 300 * KB)
+        self.pc.age(self.pc.p("P\\RealApps\\tool\\data.iso"), 400)
+        self.pc.junction("C\\Apps", self.pc.p("P\\RealApps"))
+        env = self.pc.env(program_files=[self.pc.p("C\\Program Files"), self.pc.p("C\\Apps")],
+                          drive_roots=[self.pc.C, self.pc.D, self.pc.p("P")])
+        _, r = run_scan(self.pc, self.pc.p("P"), env=env, **SMALL)
+        self.assertEqual(r["groups"], [])
+        self.assertEqual([rel(self.pc, p) for p in {x["id"]: x for x in r["windows"]}["programs"]["paths"]],
+                         ["P\\RealApps"])
 
 
 if __name__ == "__main__":

@@ -40,7 +40,21 @@ class Areas(unittest.TestCase):
         cls.pc.cleanup()
 
     def kind(self, rel_path):
-        return rules.context(self.env, self.pc.p(rel_path))
+        return rules.context(self.env, self.pc.p(rel_path))[0]
+
+    def test_context_finds_programs_projects_and_rule_targets_above(self):
+        c = U + "code\\"
+        self.assertEqual(self.kind("D\\Games\\SomeGame\\data"), rules.PROGRAM)
+        self.assertEqual(self.kind("D\\SteamLibrary\\steamapps\\common"), rules.PROGRAM)
+        self.assertIsNone(self.kind("D\\Games"))  # the stray .exe and .dll in the drive root do not count
+        self.assertEqual(self.kind(c + "old-app\\node_modules"), rules.INSIDE)
+        self.assertEqual(self.kind(c + "old-app\\node_modules\\dep"), rules.INSIDE)
+        self.assertEqual(self.kind(c + "py-app\\.venv\\Lib"), rules.INSIDE)
+        self.assertEqual(self.kind(c + "py-app\\__pycache__"), rules.INSIDE)
+        self.assertIsNone(self.kind(c + "py-app\\.venv"))  # the walk itself finds pyvenv.cfg in it
+        kind, projects = rules.context(self.env, self.pc.p(c + "mono\\packages\\a\\src"))
+        self.assertIsNone(kind)
+        self.assertEqual([rel(self.pc, p) for p in projects], [c + "mono", c + "mono\\packages\\a"])
 
     def test_context(self):
         self.assertIsNone(self.kind("C"))
@@ -57,8 +71,18 @@ class Areas(unittest.TestCase):
         self.assertEqual(self.kind("C\\Users\\Public"), rules.SKIP)
         self.assertEqual(self.kind("C\\$Recycle.Bin"), rules.SKIP)
         self.assertEqual(self.kind(U + "code\\repo\\.git"), rules.SKIP)
-        self.assertEqual(self.kind("out"), rules.SKIP)
+        # (the out folder lies outside both made-up drives, so only how the walk meets it is tested)
         self.assertEqual(rules.dir_kind(self.env, self.pc.out, "out", False, False, False), rules.SKIP)
+
+    def test_names_that_are_never_walked(self):
+        k = lambda p, name, root=False: rules.dir_kind(self.env, p, name, root, False, False)  # noqa: E731
+        for name in ("Program Files", "program files (x86)", "steamapps", "SteamLibrary", "Epic Games", "GOG Games",
+                     "XboxGames", "Riot Games", "EA Games", "Ubisoft Game Launcher"):
+            self.assertEqual(k("X:\\stuff\\" + name, name), rules.PROGRAM, name)
+        self.assertEqual(k("X:\\Backup\\Users\\old\\AppData", "AppData"), rules.APPDATA)
+        self.assertEqual(k("X:\\Windows", "Windows", True), rules.WINDOWS)
+        self.assertEqual(k("X:\\ProgramData", "ProgramData", True), rules.APPDATA)
+        self.assertIsNone(k("X:\\Projects\\Windows", "Windows"))
 
     def test_onedrive_named_folders_in_the_profile_are_synced(self):
         self.assertEqual(rules.dir_kind(self.env, self.pc.p(U + "OneDrive - Contoso"), "OneDrive - Contoso",
@@ -98,9 +122,73 @@ class Areas(unittest.TestCase):
         with self.assertRaises(OSError):
             rules.link_between(C, self.pc.p(LO + "no-such-folder\\x"))
 
+    def test_may_offer_empty(self):
+        root = self.pc.C
+        ok = lambda p: rules.may_offer_empty(self.env, self.pc.p(p), root)  # noqa: E731
+        self.assertTrue(ok(U + "Documents\\old-empty"))
+        for p in ("C", "C\\Users", U.rstrip("\\"), U + "Music", U + "Documents", U + "Downloads", U + "Saved Games",
+                  "D\\Games"):
+            self.assertFalse(ok(p), p)
+        self.assertFalse(rules.may_offer_empty(self.env, self.pc.p(U + "Documents\\old-empty"),
+                                               self.pc.p(U + "Documents\\old-empty")))
+
     def test_chromium_apps(self):
         found = {rel(self.pc, p) for p in rules.chromium_apps(self.env)}
         self.assertEqual(found, {RO + "discord", RO + "UnknownApp", LO + "SomeVendor\\ElectronApp"})
+
+
+class PatternRules(unittest.TestCase):
+    def test_build_rule(self):
+        b = rules.build_rule
+        self.assertEqual(b("node_modules", {"package.json"}, set()), ("build-node", ""))
+        self.assertIsNone(b("node_modules", {"index.js"}, set()))
+        self.assertEqual(b("bin", {"app.csproj"}, set())[0], "build-output")
+        self.assertEqual(b("obj", {"lib.fsproj"}, set())[0], "build-output")
+        self.assertIsNone(b("bin", {"package.json"}, set()))
+        self.assertEqual(b("target", {"cargo.toml"}, set())[1], "Rust build output (target)")
+        self.assertEqual(b("target", {"pom.xml"}, set())[1], "Maven build output (target)")
+        self.assertEqual(b("build", {"build.gradle.kts"}, set())[1], "Gradle build output (build)")
+        self.assertEqual(b(".gradle", {"build.gradle"}, set())[0], "build-output")
+        self.assertIsNone(b("build", {"package.json"}, set()))
+        for name in (".next", ".nuxt", ".svelte-kit", ".parcel-cache", ".turbo", ".angular"):
+            self.assertEqual(b(name, {"package.json"}, set())[0], "build-output")
+        self.assertEqual(b("Library", set(), {"assets", "projectsettings"})[1], "Unity Library")
+        self.assertIsNone(b("Library", set(), {"assets"}))
+        self.assertEqual(b("Intermediate", {"game.uproject"}, set())[1], "Unreal Intermediate")
+        self.assertEqual(b("DerivedDataCache", {"game.uproject"}, set())[0], "build-output")
+        for name in ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"):
+            self.assertEqual(b(name, set(), set()), ("py-cache", ""))
+
+    def test_programs_and_projects(self):
+        self.assertTrue(rules.holds_program({"game.exe", "engine.dll"}))
+        self.assertFalse(rules.holds_program({"setup.exe", "notes.txt"}))
+        for files, dirs in [({"package.json"}, set()), ({"app.sln"}, set()), ({"x.uproject"}, set()),
+                            ({"requirements.txt"}, set()), (set(), {".git"}), ({".git"}, set()),
+                            (set(), {"assets", "projectsettings"}), ({"settings.gradle.kts"}, set())]:
+            self.assertTrue(rules.is_project(files, dirs), (files, dirs))
+        self.assertFalse(rules.is_project({"readme.md"}, {"assets"}))
+
+    def test_suggested_keeper(self):
+        env = rules.Env(profile="C:\\Users\\you", local="C:\\Users\\you\\AppData\\Local",
+                        roaming="C:\\Users\\you\\AppData\\Roaming", locallow="C:\\Users\\you\\AppData\\LocalLow",
+                        temps=["C:\\Users\\you\\AppData\\Local\\Temp"], downloads="C:\\Users\\you\\Downloads",
+                        system_root="C:\\Windows", system_drive="C:\\", program_files=["C:\\Program Files"],
+                        program_data="C:\\ProgramData", synced=[], out_dir="C:\\Users\\you\\disk-cleanup")
+        pick = lambda *copies: min(copies, key=lambda c: rules.keep_key(env, c[0], c[1]))[0]  # noqa: E731
+        self.assertEqual(pick(("C:\\Users\\you\\Downloads\\a.jpg", 1), ("D:\\Photos\\2019\\trips\\a.jpg", 9)),
+                         "D:\\Photos\\2019\\trips\\a.jpg")
+        self.assertEqual(pick(("C:\\Users\\you\\Desktop\\a.jpg", 1), ("D:\\b\\a.jpg", 9)), "D:\\b\\a.jpg")
+        self.assertEqual(pick(("D:\\p\\a (1).jpg", 1), ("D:\\p\\a.jpg", 9)), "D:\\p\\a.jpg")
+        self.assertEqual(pick(("D:\\p\\a - Copy.jpg", 1), ("D:\\p\\longer\\a.jpg", 9)), "D:\\p\\longer\\a.jpg")
+        self.assertEqual(pick(("D:\\p\\Copy of a.jpg", 1), ("D:\\q\\a.jpg", 9)), "D:\\q\\a.jpg")
+        self.assertEqual(pick(("D:\\p\\a.jpg", 5), ("D:\\q\\a.jpg", 2)), "D:\\q\\a.jpg")
+        self.assertEqual(pick(("D:\\pp\\a.jpg", 5), ("D:\\q\\a.jpg", 5)), "D:\\q\\a.jpg")
+        self.assertEqual(pick(("D:\\q\\a.jpg", 5), ("D:\\p\\a.jpg", 5)), "D:\\p\\a.jpg")
+
+    def test_large_label_follows_the_setting(self):
+        self.assertEqual(rules.label("large-old"), "Large files not changed in 6 months (pick the ones to remove)")
+        self.assertEqual(rules.label("large-old", 30), "Large files not changed in 30 days (pick the ones to remove)")
+        self.assertEqual(rules.label("temp", 30), "Temporary files older than 7 days")
 
 
 class Locations(unittest.TestCase):

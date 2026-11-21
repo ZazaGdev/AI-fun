@@ -177,6 +177,7 @@ class PC:
         photo = os.urandom(20 * KB)
         f(u + "Pictures\\beach.jpg", data=photo)
         f(u + "Pictures\\Backup\\beach.jpg", data=photo)
+        f(u + "Downloads\\beach (1).jpg", data=photo)
         hard = f(u + "Pictures\\hard1.jpg", 20 * KB)
         os.link(hard, self.p(u + "Pictures\\hard2.jpg"))
         cloud = os.urandom(20 * KB)
@@ -185,15 +186,25 @@ class PC:
         f(u + "Videos\\old-trip.mp4", 300 * KB)
         f(u + "Documents\\report.docx", 2 * KB)
         d(u + "Documents\\old-empty\\inner")
+        d(u + "Documents\\new-empty", age=1)
         f(u + "Documents\\locked\\secret.txt")
         d(u + "Music")
         f(u + "Desktop\\notes.txt")
+        f(u + "envs\\old-env\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(u + "envs\\old-env\\Lib\\site-packages\\x.py", 2 * KB)
+        f(u + "envs\\new-env\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(u + "envs\\new-env\\Lib\\site-packages\\y.py", 2 * KB, age=3)
 
         # code projects
         c = u + "code\\"
         f(c + "old-app\\package.json", data=b"{}")
         f(c + "old-app\\index.js")
         f(c + "old-app\\node_modules\\dep\\index.js", 4 * KB)
+        f(c + "old-app\\assets\\intro.mp4", 300 * KB)
+        f(c + "mono\\package.json", data=b"{}")
+        f(c + "mono\\node_modules\\dep\\index.js", 4 * KB)
+        f(c + "mono\\packages\\a\\package.json", data=b"{}")
+        f(c + "mono\\packages\\a\\src\\x.js", age=2)
         f(c + "new-app\\package.json", data=b"{}")
         f(c + "new-app\\src\\index.js", age=2)
         f(c + "new-app\\node_modules\\dep\\index.js", 4 * KB)
@@ -222,7 +233,9 @@ class PC:
         f("C\\Users\\other\\Pictures\\x.jpg", 20 * KB)
         f("C\\Users\\Public\\Documents\\shared.txt")
 
-        # drive D: a game, a Steam library
+        # drive D: stray installer files in its root, a game, a Steam library
+        f("D\\install.exe")
+        f("D\\install.res.1033.dll")
         f("D\\Games\\SomeGame\\game.exe")
         f("D\\Games\\SomeGame\\game.dll")
         f("D\\Games\\SomeGame\\data\\big.pak", 300 * KB)

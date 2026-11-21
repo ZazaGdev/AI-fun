@@ -20,7 +20,9 @@ import rules
 import scan
 import winsys
 
-SHORT = {"downloads": "Old installers and unfinished downloads"}  # labels too long for the summary
+# labels too long for the summary's column, as in the plan's sample
+SHORT = {"downloads": "Old installers and unfinished downloads", "duplicates": "Duplicate files (pick which copies)"}
+PICK_SHOWN, SETS_SHOWN, PARTS_SHOWN = 10, 3, 20
 
 
 def size_text(n):
@@ -39,8 +41,8 @@ def num(n):
     return "{:,}".format(n)
 
 
-def plural(n, word):
-    return "%s %s%s" % (num(n), word, "" if n == 1 else "s")
+def plural(n, word, many=None):
+    return "%s %s" % (num(n), word if n == 1 else many or word + "s")
 
 
 def duration(s):
@@ -74,14 +76,56 @@ def close_note(g, running):
     return " (close %s first)" % and_list(apps) if apps else ""
 
 
+def sets_of(g):
+    """A duplicates group's items as [(set number, [items])], in their order."""
+    out = []
+    for i in g["items"]:
+        if not out or out[-1][0] != i["set"]:
+            out.append((i["set"], []))
+        out[-1][1].append(i)
+    return out
+
+
 def count_text(g):
+    if g["id"] == "duplicates":
+        return "%s, %s" % (plural(len(sets_of(g)), "set"), plural(g["count"], "copy", "copies"))
     return plural(g["count"], "item")
 
 
 def group_line(g, running):
-    label = SHORT.get(g["id"], g["label"])
+    label = SHORT.get(g["id"], g["label"].replace(" (pick the ones to remove)", ""))
     return "%4d. %-41s%8s   %11s   %s%s" % (g["n"], label, size_text(g["size"]), count_text(g),
                                            rules.SAFETY[g["safety"]], close_note(g, running))
+
+
+def pick_lines(g):
+    """The first items of a Your call group (of duplicates, the first sets) with their numbers,
+    so they can be picked in the chat."""
+    out = []
+    if g["id"] == "duplicates":
+        sets = sets_of(g)
+        for sn, items in sets[:SETS_SHOWN]:
+            head = "set %d: " % sn
+            for k, i in enumerate(items):
+                out.append("        %s#%d  %s  %s%s" % (head if k == 0 else " " * len(head), i["n"], size_text(i["size"]),
+                                                         i["path"], "  (suggested keep)" if i.get("suggest_keep") else ""))
+        if len(sets) > SETS_SHOWN:
+            out.append("        and %s more sets in the full list" % num(len(sets) - SETS_SHOWN))
+        return out
+    out += ["        #%d  %s  %s  %s" % (i["n"], size_text(i["size"]), day(i["mtime"]), i["path"])
+            for i in g["items"][:PICK_SHOWN]]
+    if len(g["items"]) > PICK_SHOWN:
+        out.append("        and %s more in the full list" % num(len(g["items"]) - PICK_SHOWN))
+    return out
+
+
+def part_lines(w, shown=None):
+    """The programs or synced folders found, largest first."""
+    parts = w.get("parts") or []
+    out = ["        %8s  %s" % (size_text(p["size"]), p["path"]) for p in parts[:shown]]
+    if shown and len(parts) > shown:
+        out.append("        and %s more in the full list" % num(len(parts) - shown))
+    return out
 
 
 def summary(report, running, txt_path, json_path):
@@ -91,14 +135,20 @@ def summary(report, running, txt_path, json_path):
     if groups:
         out += ["Can be removed: about %s in %s." % (size_text(sum(g["size"] for g in groups)),
                                                     plural(len(groups), "group")), ""]
-        out += [group_line(g, running) for g in groups]
-        out += ["", "Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again.",
-                "Your call: your own files; pick them one by one by number."]
+        for g in groups:
+            out.append(group_line(g, running))
+            if g["safety"] == "check":
+                out += pick_lines(g)
+        out += ["", "Safe: comes back by itself. Easy to get back: reinstall, rebuild or download again."]
+        if any(g["safety"] == "check" for g in groups):
+            out.append("Your call: your own files; pick them one by one by number.")
     else:
         out.append("Nothing was found that can be removed.")
     if report["windows"]:
         out += ["", "Not offered, Windows handles these:"]
-        out += ["   %-44s%8s   %s" % (w["label"], size_text(w["size"]), w["tool"]) for w in report["windows"]]
+        for w in report["windows"]:
+            out.append("   %-44s%8s   %s" % (w["label"], size_text(w["size"]), w["tool"]))
+            out += part_lines(w, PARTS_SHOWN)
     left = left_out_lines(report)
     un = report["unreadable"]
     if left or un["count"]:
@@ -115,7 +165,11 @@ LEFT_OUT = {rules.LINKS: ("folder that contains links to other folders", "folder
             rules.ONLINE: ("folder that holds online-only files", "folders that hold online-only files"),
             rules.PARTLY: ("folder that could not be read in full", "folders that could not be read in full"),
             rules.HOLDS: ("folder that holds a folder this tool never removes",
-                          "folders that hold a folder this tool never removes")}
+                          "folders that hold a folder this tool never removes"),
+            rules.RECENT: ("build folder of a project changed in the last 14 days",
+                           "build folders of projects changed in the last 14 days"),
+            rules.RECENT_VENV: ("virtual environment changed in the last 14 days",
+                                "virtual environments changed in the last 14 days")}
 
 
 def left_out_lines(report):
@@ -148,7 +202,12 @@ def text_report(report, running):
                                               rules.SAFETY[g["safety"]], close_note(g, running)))
         if g["note"]:
             out.append("   " + g["note"])
-        out += [item_line(i) for i in g["items"]]
+        if g["id"] == "duplicates":
+            for sn, items in sets_of(g):
+                out.append("   set %d, %s each:" % (sn, size_text(items[0]["size"])))
+                out += [item_line(i, "      ") + ("  suggested keep" if i.get("suggest_keep") else "") for i in items]
+        else:
+            out += [item_line(i) for i in g["items"]]
         out += skipped_lines(g)
         out.append("")
     if not report["groups"]:
@@ -161,7 +220,7 @@ def text_report(report, running):
         out.append("Not offered, Windows handles these:")
         for w in report["windows"]:
             out += ["   %s: %s" % (w["label"], size_text(w["size"])), "      " + w["tool"]]
-            out += ["      " + p for p in w["paths"]]
+            out += part_lines(w) if w.get("parts") else ["      " + p for p in w["paths"]]
         out.append("")
     un = report["unreadable"]
     if un["count"]:
@@ -179,9 +238,13 @@ def skipped_lines(g):
                                for s in g["skipped"]]
 
 
-def progress(files, folders, seconds):
-    print("Still scanning: %s in %s so far (%s)." % (plural(files, "file"), plural(folders, "folder"),
-                                                    duration(seconds)), file=sys.stderr, flush=True)
+def progress(kind, done, of, seconds):
+    """The line on stderr every 15 seconds: files and folders seen, or duplicates compared."""
+    if kind == "hash":
+        text = "Comparing possible duplicates: %s of %s files (%s)." % (num(done), num(of), duration(seconds))
+    else:
+        text = "Still scanning: %s in %s so far (%s)." % (plural(done, "file"), plural(of, "folder"), duration(seconds))
+    print(text, file=sys.stderr, flush=True)
 
 
 def scan_root(path):
