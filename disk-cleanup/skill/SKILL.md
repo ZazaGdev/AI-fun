@@ -12,10 +12,12 @@ description: Use when the user wants to know what could be cleaned up on a Windo
 1. If no path was given (`/disk-cleanup D:\`), ask which drive or folder to scan, suggesting
    `C:\`.
 2. Run `$DC scan "<path>"` in the background, with the path written with forward slashes inside
-   double quotes, such as `"D:/"` or `"C:/Users/me/My Files"`. Do not run it in the foreground
-   with a timeout: on a large or slow drive it can take longer than 10 minutes. Wait for it to
-   finish before showing anything. It only reads, writes its two reports to `~/disk-cleanup/`,
-   and prints a summary.
+   double quotes, such as `"D:/"` or `"C:/Users/me/My Files"`. A path that holds a `$` or a
+   backtick goes in single quotes instead, since both shells change those inside double quotes;
+   the same goes for the report path below. Do not run it in the foreground with a timeout: on a
+   large or slow drive it can take longer than 10 minutes. Wait for it to finish before showing
+   anything. Then check that its first line, `Scanning <folder>.`, names the folder that was
+   asked for. It only reads, writes its two reports to `~/disk-cleanup/`, and prints a summary.
 3. Show the summary exactly as printed, in a code block, with nothing shortened, reworded or
    left out: its group and item numbers are how the user would name things later. Give the
    path of the full list too (its `Full list:` line).
