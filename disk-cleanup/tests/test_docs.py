@@ -28,6 +28,32 @@ def digest(text):
     return hashlib.sha256(norm.encode("utf-8")).hexdigest()
 
 
+# what both prompts and the skill tell Claude, in the prompts' words ("I", "me") and the skill's ("the user")
+RULES = ["Do not run it in the foreground with a timeout: on a large or slow drive it can take longer than 10 minutes.",
+         "Wait for it to finish before showing anything.",
+         "in a code block, with nothing shortened, reworded or left out: its group and item numbers are how {i} would "
+         "name things later.",
+         "written with forward slashes",
+         "Check that it lists exactly the groups and items {i} named, and if it does not, say so plainly.",
+         "Never carry numbers over.",
+         "never by editing a report or writing one",
+         "Never close or stop a program, and never pick items for {me}.",
+         "use `py -3`"]
+
+
+def flat(text):
+    """`text` with every run of white space as one space, since the skill's lines wrap anywhere."""
+    return re.sub(r"\s+", " ", text)
+
+
+def check_rules(case, text, i, me):
+    text = flat(text)
+    for rule in RULES:
+        case.assertIn(rule.format(i=i, me=me), text)
+    case.assertNotIn("10-minute timeout", text)  # a whole drive can take longer: in the background only
+    case.assertEqual(text.count("in the background"), 3)  # the scan, the dry run and the --yes run
+
+
 class Prompt(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -59,10 +85,12 @@ class Prompt(unittest.TestCase):
             self.assertIn("without --yes", body)
             self.assertIn("winget install Python.Python.3.13", body)
             self.assertIn("PowerShell does not expand ~ for python", body)
-            self.assertIn("scan '<path>'", body)
-            self.assertIn("clean '<report data>'", body)
+            self.assertIn('python "~/disk-cleanup/tool/disk_cleanup.py" scan "<path>"', body)
+            self.assertIn('python "C:/Users/me/disk-cleanup/tool/disk_cleanup.py" scan "D:/"', body)
+            self.assertIn('python "~/disk-cleanup/tool/disk_cleanup.py" clean "<report data>"', body)
+            self.assertIn("If that fails or opens the Microsoft Store, run `py -3 --version`", body)
             self.assertIn("comma-separated", body)
-            self.assertEqual(body.count("10-minute timeout"), 2)
+            check_rules(self, body, "I", "me")
             self.assertIn("Dropbox's info.json and a few Windows registry keys", body)  # what else it reads
 
     def test_the_check_line_says_ok_for_copies_of_the_scripts(self):
@@ -104,11 +132,12 @@ class Skill(unittest.TestCase):
             self.assertIn(words, description)
         self.assertIn("4. Stop there. Do not ask whether to remove anything", text)
         self.assertIn("is never a request\n  to remove anything", text)
-        self.assertIn("$DC scan '<path>'", text)  # single quotes: Git Bash never ends a "C:\"
-        self.assertIn("$DC clean '<report data>'", text)
+        self.assertIn('$DC scan "<path>"', text)  # forward slashes in double quotes, for a space or an apostrophe
+        self.assertIn('$DC clean "<report data>"', text)
         self.assertIn("without `--yes`", text)
         self.assertIn("comma-separated", text)
-        self.assertEqual(text.count("10-minute timeout"), 2)  # the scan and the clean
+        self.assertIn('such as `"D:/"` or `"C:/Users/me/My Files"`', flat(text))
+        check_rules(self, text, "the user", "the user")
 
 
 class Readme(unittest.TestCase):
@@ -120,6 +149,11 @@ class Readme(unittest.TestCase):
         self.assertIn("Dropbox's `info.json` and a few Windows registry keys", text)  # what else it reads
         self.assertEqual(text.lower().count("empty folders"), 1)  # only the line saying they are not listed
         self.assertNotRegex(text, r"[A-Za-z]:\\Users\\(?!you\\)\w")  # only made-up user folders
+        # an install that also updates: Copy-Item into a folder that is there would nest the new copy inside it
+        self.assertIn('New-Item -ItemType Directory -Force "$HOME\\.claude\\skills\\disk-cleanup" | Out-Null\n'
+                      'Copy-Item -Recurse -Force AI-fun\\disk-cleanup\\skill\\* "$HOME\\.claude\\skills\\disk-cleanup"\n', text)
+        self.assertIn("The same two lines update it", text)
+        self.assertIn("name the items again from the new summary", text)
 
     def test_the_sample_summary_is_one_the_scan_could_print(self):
         text = read(PROJECT, "README.md")

@@ -79,7 +79,7 @@ never opened, since that would download them.
   programs are running.
 - Writes two reports to `~/disk-cleanup/`: `scan-YYYYMMDD-HHMMSS.txt`, the full list, and
   `scan-YYYYMMDD-HHMMSS.json`, the same data for the clean step.
-- Moves only the items you ask for to the Recycle Bin, and writes a log of that run,
+- Moves only the items you ask for to the Recycle Bin, and writes a log of that run as it goes,
   `clean-YYYYMMDD-HHMMSS.txt`, next to the report.
 - Sends nothing anywhere. Option 2 of the prompt downloads the five scripts from this repo,
   after asking you; Option 1 downloads nothing.
@@ -88,14 +88,17 @@ The reports list your own file names, so think before you share them.
 
 ## Install the skill
 
-Copy the `skill` folder to `~/.claude/skills/disk-cleanup`, so you end up with
+Copy what is in the `skill` folder to `~/.claude/skills/disk-cleanup`, so you end up with
 `~/.claude/skills/disk-cleanup/SKILL.md`. The folder must be named `disk-cleanup`. Start a new
 Claude Code session.
 
 ```powershell
 git clone https://github.com/ZazaGdev/AI-fun.git
-Copy-Item -Recurse AI-fun\disk-cleanup\skill "$HOME\.claude\skills\disk-cleanup"
+New-Item -ItemType Directory -Force "$HOME\.claude\skills\disk-cleanup" | Out-Null
+Copy-Item -Recurse -Force AI-fun\disk-cleanup\skill\* "$HOME\.claude\skills\disk-cleanup"
 ```
+
+The same two lines update it: run them again after a `git pull` in `AI-fun`.
 
 ## Use
 
@@ -113,9 +116,12 @@ remove anything.
 
 Ask Claude in your own words, using the group or item numbers from the summary or the full
 list, for example `move group 2 to the Recycle Bin` or `remove items 412 and 415`. Claude first
-shows what would move and what it leaves out, and why. It moves them to the Recycle Bin only
-after you say yes. Anything Windows cannot put in the Recycle Bin is skipped, never deleted for
-good.
+shows what would move, item by item, and what it leaves out, and why. It moves them to the
+Recycle Bin only after you say yes. Anything Windows cannot put in the Recycle Bin is skipped,
+never deleted for good.
+
+The numbers belong to the summary they were printed in. After a new scan they may name other
+files, so name the items again from the new summary.
 
 Every item is checked again against the disk before it moves: one that changed, moved, became
 a link or no longer fits its rule is left out. Duplicates and large files go by item number
@@ -123,11 +129,11 @@ only, and a duplicate is moved only while another copy stays.
 
 The space comes back when you empty the Recycle Bin. Until then you can restore anything from
 it. If a run ever seems stuck, look for a Windows dialog asking whether to delete something for
-good, and answer No.
+good, and answer No. The run then stops and lists what did not move.
 
 ## Run the script directly
 
-In PowerShell:
+In PowerShell (if `python` is not found, use `py -3` in its place):
 
 ```powershell
 python "$HOME\.claude\skills\disk-cleanup\scripts\disk_cleanup.py" scan D:\
@@ -135,8 +141,9 @@ python "$HOME\.claude\skills\disk-cleanup\scripts\disk_cleanup.py" clean <report
 ```
 
 `scan` options: `--out <folder>` for the reports, `--workers <1-4>` for the threads that read
-the disk (4 at most), and `--dupe-min-mb`, `--large-mb` and `--large-days` for the duplicate
-and large-file thresholds (1, 500 and 180 by default).
+the disk (4 at most), `--dupe-min-mb` for the smallest file compared for duplicates (1 by
+default), and `--large-mb` and `--large-days` to raise the large-file thresholds. Those are
+500 MB and 180 days, and cannot go lower.
 
 `clean` takes group numbers or names with `--groups`, item numbers with `--items`, and item
 numbers to leave out with `--skip`. Without `--yes` it is a dry run that changes nothing. It

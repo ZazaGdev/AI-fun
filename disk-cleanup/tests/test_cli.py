@@ -5,6 +5,7 @@ import glob
 import io
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -55,6 +56,9 @@ class Formats(unittest.TestCase):
         self.assertEqual(dc.scan_root("\\\\?\\UNC\\server\\share\\x"), "\\\\server\\share\\x")
         self.assertEqual(dc.scan_root("//?/C:/Users"), "C:\\Users")
         self.assertEqual(dc.scan_root("//?/C:"), "C:\\")
+        self.assertEqual(dc.scan_root("D:/"), "D:\\")  # the prompts write paths with forward slashes
+        self.assertEqual(dc.scan_root("C:/"), "C:\\")
+        self.assertEqual(dc.scan_root("C:/Users/me/O'Brien Files/"), "C:\\Users\\me\\O'Brien Files")
         for device in ("\\\\.\\C:", "\\\\.\\PhysicalDrive0", "\\\\?\\Volume{0b5d0c55-1111-2222-3333-444455556666}\\",
                        "\\\\?\\GLOBALROOT\\Device\\HarddiskVolumeShadowCopy1"):
             self.assertIsNone(dc.scan_root(device), device)
@@ -220,6 +224,26 @@ class ScanCommand(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertTrue(out.startswith("Scanning %s. This only reads" % pc.C))
             self.assertNotIn("leads there", out)
+        finally:
+            pc.cleanup()
+
+    def test_paths_written_with_forward_slashes_print_the_usual_form(self):
+        pc = PC()  # its own, since it adds a temp folder
+        try:
+            folder = pc.dir("C\\Users\\you\\AppData\\Local\\Temp\\O'Brien Files")  # a space and an apostrophe
+            pc.age(pc.file("C\\Users\\you\\AppData\\Local\\Temp\\O'Brien Files\\notes.txt"), 400)
+            pc.age(folder, 400)
+            code, out, err = run(["scan", folder.replace("\\", "/")], env=pc.env(), win=FakeWin())
+            self.assertEqual(code, 0, err)
+            self.assertTrue(out.startswith("Scanning %s. This only reads" % folder), out[:300])
+            code, out, err = run(["scan", pc.C.replace("\\", "/") + "/"], env=pc.env(), win=FakeWin())
+            self.assertEqual(code, 0, err)
+            self.assertTrue(out.startswith("Scanning %s. This only reads" % pc.C), out[:300])
+            self.assertNotIn("leads there", out)
+            report = re.search(r"^Report data: (.+)$", out, re.M).group(1)
+            code, out, err = run(["clean", report.replace("\\", "/"), "--groups", "temp"], env=pc.env(), win=FakeWin())
+            self.assertEqual(code, 0, err)
+            self.assertRegex(out, r"\n      #\d+  \S+ \S+  %s\n" % re.escape(folder))
         finally:
             pc.cleanup()
 
