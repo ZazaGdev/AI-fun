@@ -170,6 +170,12 @@ class Refusals(unittest.TestCase):
         code, out, _ = run(["clean", self.edited(point), "--items", str(n)], env=self.pc.env(), win=FakeWin())
         self.assertEqual(left_reasons(out), {n: clean.NO_RULE})
 
+    def test_a_folder_holding_paths_too_long_for_the_recycle_bin_is_left_out(self):
+        n = number(self.pc, self.report, LO + "Temp\\deep-old")  # a file 337 characters below it
+        out = self.clean("--items", str(n), win=FakeWin())[1]
+        self.assertEqual(left_reasons(out), {n: clean.TOO_DEEP})
+        self.assertIn("Would move to the Recycle Bin:\n   Nothing.", out)
+
     def test_a_zero_mb_recycle_bin_takes_nothing(self):
         out = self.clean("--groups", "temp", win=FakeWin(max_mb=0))[1]
         self.assertIn("Would move to the Recycle Bin:\n   Nothing.", out)
@@ -290,8 +296,10 @@ class Moves(unittest.TestCase):
         before = snapshot(self.pc)
         out, win = self.clean(js, "--groups", "temp,crash-dumps", "--skip", str(skip), "--yes")
         crash = next(g for g in report["groups"] if g["id"] == "crash-dumps")
-        want = {i["path"] for i in temp["items"] + crash["items"] if i["n"] != skip}
+        deep = self.pc.p(LO + "Temp\\deep-old")  # holds paths too long for the Recycle Bin
+        want = {i["path"] for i in temp["items"] + crash["items"] if i["n"] != skip and i["path"] != deep}
         self.assertEqual(set(win.moved), want)
+        self.assertEqual(left_reasons(out), {number(self.pc, report, LO + "Temp\\deep-old"): clean.TOO_DEEP})
         after = snapshot(self.pc)
         self.assertTrue(os.path.exists(self.pc.p(LO + "Temp\\old.tmp")))
         changed = {p for p in before if p not in after}
@@ -495,11 +503,12 @@ class Moves(unittest.TestCase):
 
     def test_an_item_in_use_is_tried_again_then_left_out(self):
         js, report = scan_report(self.pc)
-        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"]]
-        stuck = temp[0]["path"]
+        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"] if not i["path"].endswith("deep-old")]
+        stuck = self.pc.p(LO + "Temp\\old-folder")
         out, win = self.clean(js, "--groups", "temp", "--yes", stuck=[stuck])
-        self.assertEqual(set(win.moved), {i["path"] for i in temp[1:]})
-        self.assertEqual(left_reasons(out), {temp[0]["n"]: clean.IN_USE})
+        self.assertEqual(set(win.moved), {i["path"] for i in temp if i["path"] != stuck})
+        n = lambda p: number(self.pc, report, p)  # noqa: E731
+        self.assertEqual(left_reasons(out), {n(LO + "Temp\\old-folder"): clean.IN_USE, n(LO + "Temp\\deep-old"): clean.TOO_DEEP})
         self.assertEqual(win.calls[-1], [stuck])  # tried once more on its own
         self.assertTrue(os.path.exists(stuck))
 
@@ -507,10 +516,56 @@ class Moves(unittest.TestCase):
         for k in range(450):
             self.pc.age(self.pc.file(LO + "Temp\\batch-%03d.tmp" % k), 400)
         js, report = scan_report(self.pc)
-        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"]]
+        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"] if not i["path"].endswith("deep-old")]
         out, win = self.clean(js, "--groups", "temp", "--yes")
         self.assertEqual([len(c) for c in win.calls], [200, 200, len(temp) - 400])
         self.assertEqual(len(win.moved), len(temp))
+
+    def test_a_no_in_windows_dialog_stops_the_run(self):
+        # Windows asks whether to delete old-folder for good, the user says No, and the call comes back cancelled
+        js, report = scan_report(self.pc)
+        folder = self.pc.p(LO + "Temp\\old-folder")
+        out, win = self.clean(js, "--groups", "temp", "--yes", cancel=[folder])
+        self.assertEqual(len(win.calls), 1)  # never asked again, nothing more tried
+        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"]]
+        self.assertEqual(set(win.moved), {i["path"] for i in temp if not i["path"].endswith(("deep-old", "old-folder"))})
+        n = lambda p: number(self.pc, report, p)  # noqa: E731
+        self.assertEqual(left_reasons(out), {n(LO + "Temp\\old-folder"): clean.CANCELLED,
+                                             n(LO + "Temp\\deep-old"): clean.TOO_DEEP})
+        self.assertTrue(os.path.exists(folder))
+
+    def test_a_cancelled_move_leaves_the_later_batches_untried(self):
+        for k in range(450):
+            self.pc.age(self.pc.file(LO + "Temp\\batch-%03d.tmp" % k), 400)
+        js, report = scan_report(self.pc)
+        folder = self.pc.p(LO + "Temp\\old-folder")  # the largest that can move, so in the first batch
+        out, win = self.clean(js, "--groups", "temp", "--yes", cancel=[folder])
+        self.assertEqual([len(c) for c in win.calls], [200])
+        self.assertEqual(len(win.moved), 199)
+        with open(out.rstrip().splitlines()[-1].split(": ", 1)[1], encoding="utf-8") as f:
+            why = left_reasons(f.read())  # the log lists every item left out
+        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"]]
+        untried = len(temp) - 1 - 200  # all but deep-old (too deep) and the first batch
+        self.assertEqual(sorted(why.values()), sorted([clean.CANCELLED, clean.TOO_DEEP] + [clean.NOT_TRIED] * untried))
+        self.assertEqual(why[number(self.pc, report, LO + "Temp\\old-folder")], clean.CANCELLED)
+        self.assertIn("\n   and %d more" % (2 + untried - dc.LEFT_SHOWN), out)
+
+    def test_a_no_for_an_item_tried_on_its_own_stops_the_run_too(self):
+        js, report = scan_report(self.pc)
+        first, second = self.pc.p(LO + "Temp\\old-folder"), self.pc.p(LO + "Temp\\old.tmp")  # in this order
+
+        class NoOnItsOwn(FakeWin):
+            def recycle(self, paths):
+                done = FakeWin.recycle(self, paths)
+                return (0x4C7, True) if paths == [first] else done
+        win = NoOnItsOwn(bin_dir=self.bin, stuck=[first, second])  # both stay in the batch call
+        code, out, err = run(["clean", js, "--groups", "temp", "--yes"], env=self.pc.env(), win=win)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(win.calls[1:], [[first]])  # second is not tried again
+        n = lambda p: number(self.pc, report, p)  # noqa: E731
+        self.assertEqual(left_reasons(out), {n(LO + "Temp\\old-folder"): clean.CANCELLED,
+                                             n(LO + "Temp\\old.tmp"): clean.NOT_TRIED,
+                                             n(LO + "Temp\\deep-old"): clean.TOO_DEEP})
 
     def test_what_the_recycle_bin_cannot_take_stays(self):
         self.pc.file(LO + "Temp\\big.bin", 1536 * KB)
@@ -525,13 +580,22 @@ class Moves(unittest.TestCase):
 
     def test_an_item_inside_another_picked_item_goes_with_it(self):
         js, report = scan_report(self.pc)
-        outer = number(self.pc, report, LO + "Temp\\deep-old")
+        outer = number(self.pc, report, LO + "Temp\\old-folder")
         crash = next(g for g in report["groups"] if g["id"] == "crash-dumps")["items"][0]
-        crash["path"] = self.pc.deep_file  # edited to point inside the outer item
+        crash["path"] = self.pc.p(LO + "Temp\\old-folder\\a.txt")  # edited to point inside the outer item
         save(report, js)
         out, win = self.clean(js, "--items", "%d,%d" % (outer, crash["n"]), "--yes")
-        self.assertEqual(win.moved, [self.pc.p(LO + "Temp\\deep-old")])
-        self.assertEqual(win.calls, [[self.pc.p(LO + "Temp\\deep-old")]])
+        self.assertEqual(win.moved, [self.pc.p(LO + "Temp\\old-folder")])
+        self.assertEqual(win.calls, [[self.pc.p(LO + "Temp\\old-folder")]])
+
+
+class BinCheck(unittest.TestCase):
+    def test_a_folder_is_left_out_when_its_deepest_path_would_be_too_long_in_the_bin(self):
+        folder = "C:\\Users\\you\\AppData\\Local\\Temp\\deep"
+        fits = ("temp", {"n": 1, "path": folder}, 10, None, len(folder) + 179)  # 179 + 80 for the bin's names
+        deep = ("temp", {"n": 2, "path": folder + "2"}, 10, None, len(folder) + 1 + 180)
+        ok, left, _ = clean.bin_check([fits, deep], FakeWin())
+        self.assertEqual((ok, left), ([fits], [("temp", deep[1], clean.TOO_DEEP)]))
 
 
 @unittest.skipUnless(os.environ.get("DISK_CLEANUP_REAL_RECYCLE") == "1",

@@ -29,7 +29,7 @@ Wherever this prompt says ~, use the full path of my home folder (such as C:\Use
 2. Write FILE 1 to `~/disk-cleanup/tool/disk_cleanup.py`, FILE 2 to `~/disk-cleanup/tool/clean.py`, FILE 3 to `~/disk-cleanup/tool/rules.py`, FILE 4 to `~/disk-cleanup/tool/scan.py` and FILE 5 to `~/disk-cleanup/tool/winsys.py`. Copy the text between each BEGIN line and END line exactly, character for character, without those two lines. Do not shorten, reformat, translate, fix or improve anything. Write each file in one go.
 
 3. Check all five copies by running this:
-   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','9f6f61a13603efbac8ddddf35b42e284da452a582ab56900d74cd91b0398e824'),('clean.py','aec608a3e380c054dc029af7777259cb20c086f6bf26d3da9f0e24eb0fddbb7c'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
+   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','45eddc2d153e6772eac2f67a76b04ca10652a0d254e569446d33880fe27efee0'),('clean.py','c5ec2d5e5a0454d5d94bf9091487db3788c08a0f493b8ecc66dbf44428b06417'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
    It must print OK for all five files. If a file prints MISMATCH, write that file again from the text below and run the check again. Only go on when all five say OK.
 
 4. Run the scan, with the path from the first line in single quotes: `python ~/disk-cleanup/tool/disk_cleanup.py scan '<path>'`. Run it in the background or with a 10-minute timeout: a whole drive can take several minutes. It only reads: names, sizes and dates in that folder, and the contents of possible duplicates there to compare them. To know what to leave alone, it also reads where Dropbox, OneDrive and other sync clients keep their folders (Dropbox's info.json and a few Windows registry keys), the names of the folders in my profile and the top of my AppData, the Recycle Bin's settings, and which programs are running. It writes its two reports to ~/disk-cleanup/ and sends nothing anywhere.
@@ -464,11 +464,11 @@ def cmd_clean(a, env=None, win=None):
     checker = clean.Checker(env, report, now, chosen, win.processes())
     ok, left = [], []
     for gid, item in chosen:
-        why, size, ident = checker.still_matches(gid, item)
+        why, size, ident, longest = checker.still_matches(gid, item)
         if why:
             left.append((gid, item, why))
         else:
-            ok.append((gid, item, size, ident))
+            ok.append((gid, item, size, ident, longest))
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
     days = checker.large_days
@@ -566,6 +566,8 @@ from scan import file_hash
 MAX_AGE = 24 * 3600  # a report older than this is refused
 BATCH = 200          # paths per Recycle Bin call
 MAX_PATH = 260
+BIN_NAMES = 80       # what the Recycle Bin puts before a folder's contents: X:\$Recycle.Bin\<SID>\$Rxxxxxx
+ERROR_CANCELLED = 0x4C7  # SHFileOperationW's answer when the user cancels
 
 # why a chosen item is left out
 BROKEN = "its entry in the report is broken"
@@ -579,7 +581,10 @@ NO_RULE = "it no longer fits the rule it was offered by"
 KEEP_ONE = "keep at least one copy: every copy of this file was selected"
 NO_COPY = "no other copy of it is left as it was"
 NO_BIN = "Windows can't put this in the Recycle Bin"
+TOO_DEEP = "it holds paths too long for the Recycle Bin"
 IN_USE = "in use or access denied"
+CANCELLED = "the move was cancelled, perhaps by a No in a Windows dialog"
+NOT_TRIED = "not tried: the run stopped after a cancelled move"
 
 
 class Refused(Exception):
@@ -678,11 +683,11 @@ def unnest(chosen):
 
 
 class Tree:
-    """What a folder holds now, read again."""
-    __slots__ = ("files", "size", "latest", "links", "online", "bad", "holds")
+    """What a folder holds now, read again, with the length of the longest full path in it."""
+    __slots__ = ("files", "size", "latest", "links", "online", "bad", "holds", "longest")
 
     def __init__(self):
-        self.files = self.size = 0
+        self.files = self.size = self.longest = 0
         self.latest = 0.0
         self.links = self.online = self.bad = self.holds = False
 
@@ -693,6 +698,7 @@ class Tree:
 
 def tree(path, never):
     t, stack = Tree(), [path]
+    t.longest = len(path)
     while stack:
         d = stack.pop()
         try:
@@ -702,6 +708,7 @@ def tree(path, never):
             t.bad = True
             continue
         for name, isdir, st in entries:
+            t.longest = max(t.longest, len(os.path.join(d, name)))
             a = st.st_file_attributes
             if a & REPARSE:
                 t.links = True
@@ -793,44 +800,46 @@ class Checker:
                 self.known.setdefault(ncase(t["path"]), t)
 
     def still_matches(self, gid, item):
-        """Why `item` of group `gid` may not be removed now, or None, with its size now and the
-        identity (volume, file id) of what was checked. All of it is worked out again from the disk
-        and the current rules: the report gives only the path, and for Your call files the size and
-        time the user saw."""
+        """Why `item` of group `gid` may not be removed now, or None, with its size now, the
+        identity (volume, file id) of what was checked and the length of the longest full path in
+        it. All of it is worked out again from the disk and the current rules: the report gives
+        only the path, and for Your call files the size and time the user saw."""
         p, kind = item.get("path"), item.get("kind")
         if not isinstance(p, str) or kind not in ("file", "dir") or gid not in rules.GROUPS:
-            return BROKEN, 0, None
+            return BROKEN, 0, None, 0
         if winsys.odd_name(p):
-            return NOT_USUAL, 0, None
+            return NOT_USUAL, 0, None, 0
         try:
             st = os.stat(ext(p), follow_symlinks=False)
         except OSError:
-            return GONE, 0, None
+            return GONE, 0, None, 0
         if st.st_file_attributes & REPARSE:
-            return IS_LINK, 0, None
+            return IS_LINK, 0, None, 0
         if not winsys.canonical(p):  # an 8.3 short name, or a link on the way
-            return NOT_USUAL, 0, None
+            return NOT_USUAL, 0, None, 0
         if not under(ncase(p), self.n_root):
-            return OUTSIDE_ROOT, 0, None
+            return OUTSIDE_ROOT, 0, None, 0
         if rules.protected(self.env, p) or ncase(p) in self.env.never:
-            return PROTECTED, 0, None
+            return PROTECTED, 0, None, 0
         try:
             linked = rules.link_between(self.root, p)
         except OSError:
-            return GONE, 0, None
+            return GONE, 0, None, 0
         if st.st_file_attributes & PLACEHOLDER:
-            return rules.ONLINE, 0, None
+            return rules.ONLINE, 0, None, 0
         if linked:
-            return rules.LINKS, 0, None
+            return rules.LINKS, 0, None, 0
         isdir = stat.S_ISDIR(st.st_mode)
         if isdir != (kind == "dir") or not (isdir or stat.S_ISREG(st.st_mode)):
-            return CHANGED, 0, None
+            return CHANGED, 0, None, 0
         t = tree(p, self.env.never) if isdir else None
         if t and t.problem():
-            return t.problem(), 0, None
+            return t.problem(), 0, None, 0
         latest = max(st.st_mtime, birth(st), t.latest if t else 0.0)
         why = getattr(self, "rule_" + gid.replace("-", "_"))(gid, p, item, st, latest)
-        return (why, 0, None) if why else (None, t.size if t else st.st_size, (st.st_dev, st.st_ino))
+        if why:
+            return why, 0, None, 0
+        return None, t.size if t else st.st_size, (st.st_dev, st.st_ino), t.longest if t else len(p)
 
     def chosen(self, path):
         """`path` or a folder above it is chosen in this run, so it goes too."""
@@ -965,8 +974,10 @@ class Checker:
 
 def bin_check(ok, win):
     """Leave out what Windows can't put in the Recycle Bin: not a fixed drive, the bin switched
-    off for the drive or by policy, bigger than the bin, or a path of 260 characters or more.
-    Returns (ok, left, warnings), with a WARNING when a drive's bin has no room for the rest."""
+    off for the drive or by policy, bigger than the bin, a path of 260 characters or more, or a
+    folder whose deepest path would be that long inside the bin. Entries are (group, item, size,
+    identity, longest path in it). Returns (ok, left, warnings), with a WARNING when a drive's bin
+    has no room for the rest."""
     by_drive, left, warnings = {}, [], []
     for e in ok:
         by_drive.setdefault(winsys.drive_of(e[1]["path"]), []).append(e)
@@ -979,6 +990,8 @@ def bin_check(ok, win):
         for e in entries:
             if not usable or len(e[1]["path"]) >= MAX_PATH or (cap is not None and e[2] > cap):
                 left.append((e[0], e[1], NO_BIN))
+            elif e[4] - len(e[1]["path"]) + BIN_NAMES >= MAX_PATH:  # (not tried on a real bin; it only leaves more out)
+                left.append((e[0], e[1], TOO_DEEP))
             else:
                 fit.append(e)
         used = win.recycle_usage(drive)[0]
@@ -1002,25 +1015,55 @@ def still_there(path, ident):
     return (st.st_dev, st.st_ino) == ident
 
 
+def recycled(win, paths):
+    """Ask Windows to move `paths` to the Recycle Bin. True when the call came back cancelled: the
+    user answered No in Windows' "delete permanently?" dialog, or cancelled."""
+    try:
+        code, aborted = win.recycle(paths)
+    except ValueError:
+        return False  # a path the call refuses: nothing moved, and each one is tried on its own
+    return bool(aborted) or code == ERROR_CANCELLED
+
+
+def sort_out(entries, why, moved, left):
+    """Each entry whose checked file or folder is gone from its path counts as moved; each one
+    still there is left out with `why`."""
+    for e in entries:
+        if still_there(e[1]["path"], e[3]):
+            left.append((e[0], e[1], why))
+        else:
+            moved.append(e)
+
+
+def move_batch(batch, win):
+    """One batch: (moved, left, stopped), stopped when a call came back cancelled."""
+    moved, left = [], []
+    if recycled(win, [e[1]["path"] for e in batch]):
+        sort_out(batch, CANCELLED, moved, left)
+        return moved, left, True
+    for k, e in enumerate(batch):
+        if still_there(e[1]["path"], e[3]) and recycled(win, [e[1]["path"]]):
+            sort_out([e], CANCELLED, moved, left)
+            sort_out(batch[k + 1:], NOT_TRIED, moved, left)
+            return moved, left, True
+        sort_out([e], IN_USE, moved, left)
+    return moved, left, False
+
+
 def move(ok, win):
     """Move the checked items to the Recycle Bin, up to 200 paths a call. An item counts as moved
     only when what was checked is no longer at its path. One still there is tried once more on
-    its own; something new at the path is never touched. Returns (moved, left)."""
+    its own; something new at the path is never touched. A call that comes back cancelled stops
+    the run: none of its paths is tried again and no other call is made. Returns (moved, left)."""
     moved, left = [], []
     for start in range(0, len(ok), BATCH):
-        batch = ok[start:start + BATCH]
-        try:
-            win.recycle([e[1]["path"] for e in batch])
-        except ValueError:
-            pass  # a path the call refuses: each one is tried on its own below
-        for e in batch:
-            if still_there(e[1]["path"], e[3]):
-                try:
-                    win.recycle([e[1]["path"]])
-                except ValueError:
-                    pass
-            (left if still_there(e[1]["path"], e[3]) else moved).append(e)
-    return moved, [(e[0], e[1], IN_USE) for e in left]
+        done, out, stopped = move_batch(ok[start:start + BATCH], win)
+        moved += done
+        left += out
+        if stopped:
+            left += [(e[0], e[1], NOT_TRIED) for e in ok[start + BATCH:]]
+            break
+    return moved, left
 ----- END FILE 2 -----
 
 ----- BEGIN FILE 3: rules.py -----

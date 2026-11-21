@@ -421,11 +421,11 @@ def cmd_clean(a, env=None, win=None):
     checker = clean.Checker(env, report, now, chosen, win.processes())
     ok, left = [], []
     for gid, item in chosen:
-        why, size, ident = checker.still_matches(gid, item)
+        why, size, ident, longest = checker.still_matches(gid, item)
         if why:
             left.append((gid, item, why))
         else:
-            ok.append((gid, item, size, ident))
+            ok.append((gid, item, size, ident, longest))
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
     days = checker.large_days
