@@ -29,7 +29,7 @@ Wherever this prompt says ~, use the full path of my home folder (such as C:\Use
 2. Write FILE 1 to `~/disk-cleanup/tool/disk_cleanup.py`, FILE 2 to `~/disk-cleanup/tool/clean.py`, FILE 3 to `~/disk-cleanup/tool/rules.py`, FILE 4 to `~/disk-cleanup/tool/scan.py` and FILE 5 to `~/disk-cleanup/tool/winsys.py`. Copy the text between each BEGIN line and END line exactly, character for character, without those two lines. Do not shorten, reformat, translate, fix or improve anything. Write each file in one go.
 
 3. Check all five copies by running this:
-   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','cfcdae608f3b9449073815dcf03e774b842ae791d3bb3d37ce82a429f1ef7276'),('clean.py','c28ebf42324680c2c5524794d66f1fcc12cca9b1f296ef08c22933bd1eb4655a'),('rules.py','762a78e8d8f32c230491f1313b30b99003208e4cc05f7efcd54ee1740e9abf66'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
+   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','9f6f61a13603efbac8ddddf35b42e284da452a582ab56900d74cd91b0398e824'),('clean.py','aec608a3e380c054dc029af7777259cb20c086f6bf26d3da9f0e24eb0fddbb7c'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
    It must print OK for all five files. If a file prints MISMATCH, write that file again from the text below and run the check again. Only go on when all five say OK.
 
 4. Run the scan, with the path from the first line in single quotes: `python ~/disk-cleanup/tool/disk_cleanup.py scan '<path>'`. Run it in the background or with a 10-minute timeout: a whole drive can take several minutes. It only reads: names, sizes and dates in that folder, and the contents of possible duplicates there to compare them. To know what to leave alone, it also reads where Dropbox, OneDrive and other sync clients keep their folders (Dropbox's info.json and a few Windows registry keys), the names of the folders in my profile and the top of my AppData, the Recycle Bin's settings, and which programs are running. It writes its two reports to ~/disk-cleanup/ and sends nothing anywhere.
@@ -471,7 +471,7 @@ def cmd_clean(a, env=None, win=None):
             ok.append((gid, item, size, ident))
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
-    days = clean.setting(report, "large_days", 180)
+    days = checker.large_days
     named = set(items)  # listed one by one in what clean prints; a group named whole shows its first 10
     if not a.yes:
         print("\n".join(["Dry run: nothing has been changed.", ""]
@@ -495,6 +495,16 @@ def not_negative(text):
     return v
 
 
+def at_least(least):
+    """An argparse type for a threshold that can only be raised: a number of `least` or more."""
+    def number(text):
+        v = not_negative(text)
+        if v < least:
+            raise argparse.ArgumentTypeError("must be %g or more" % least)
+        return v
+    return number
+
+
 def parser():
     ap = argparse.ArgumentParser(prog="disk_cleanup.py", description="List what could be cleaned up on a Windows "
                                  "drive or folder, grouped by kind, with sizes and how safe each group is.")
@@ -505,8 +515,10 @@ def parser():
     sc.add_argument("--out", help="folder for the reports (default %%USERPROFILE%%\\disk-cleanup)")
     sc.add_argument("--workers", type=int, default=scan.MAX_WORKERS, help="threads that read the disk, 1 to 4")
     sc.add_argument("--dupe-min-mb", type=not_negative, default=1.0, help="smallest file to compare for duplicates")
-    sc.add_argument("--large-mb", type=not_negative, default=500.0, help="smallest file to list as large")
-    sc.add_argument("--large-days", type=not_negative, default=180.0, help="days unchanged for a large file")
+    sc.add_argument("--large-mb", type=at_least(rules.LARGE_MB_MIN), default=float(rules.LARGE_MB_MIN),
+                    help="smallest file to list as large, %g or more" % rules.LARGE_MB_MIN)
+    sc.add_argument("--large-days", type=at_least(rules.LARGE_DAYS_MIN), default=float(rules.LARGE_DAYS_MIN),
+                    help="days unchanged for a large file, %g or more" % rules.LARGE_DAYS_MIN)
     cl = sub.add_parser("clean", help="move the groups or items you ask for, from a scan report, to the Recycle Bin")
     cl.add_argument("report", help="the scan-*.json file the scan wrote")
     cl.add_argument("--groups", default="", help="group numbers or names from the summary, such as 1,3,temp")
@@ -768,8 +780,10 @@ class Checker:
     def __init__(self, env, report, now, chosen, processes):
         self.env, self.now, self.root = env, now, report["root"]
         self.n_root = ncase(self.root)
-        self.large_min = setting(report, "large_mb", 500) * MB
-        self.large_age = setting(report, "large_days", 180) * DAY
+        # a report can only raise the large-file rule's size and age, never lower them
+        self.large_min = max(setting(report, "large_mb", rules.LARGE_MB_MIN), rules.LARGE_MB_MIN) * MB
+        self.large_days = max(setting(report, "large_days", rules.LARGE_DAYS_MIN), rules.LARGE_DAYS_MIN)
+        self.large_age = self.large_days * DAY
         self.selected = {ncase(i["path"]) for _, i in chosen if isinstance(i.get("path"), str)}
         self.processes = {p.lower() for p in processes}
         self.newest = {}  # outermost project (ncase): its newest change, read once per run
@@ -911,21 +925,33 @@ class Checker:
             return CHANGED
         chosen_copy = False
         for q in item.get("same_as") if isinstance(item.get("same_as"), list) else []:
-            if not isinstance(q, str) or not winsys.canonical(q) or not under(ncase(q), self.n_root):
-                continue
-            try:
-                sq = os.stat(ext(q), follow_symlinks=False)
-            except OSError:
-                continue
-            if (sq.st_file_attributes & (REPARSE | PLACEHOLDER) or not stat.S_ISREG(sq.st_mode)
-                    or sq.st_size != st.st_size or (sq.st_dev, sq.st_ino) == (st.st_dev, st.st_ino)
-                    or file_hash(q, sq.st_size, False) != h):
+            if not self.other_copy(q, st, h):
                 continue
             if self.chosen(q):
                 chosen_copy = True
                 continue
             return None  # a copy stays
         return KEEP_ONE if chosen_copy else NO_COPY
+
+    def other_copy(self, q, st, h):
+        """True when `q` is another copy of the file (`st`, full hash `h`) in a place the item
+        itself could be in: its one plain spelling, inside the root, not protected or never
+        removed, no link on the way, in a user area, the same size and hash, and not the same file
+        (a hard link)."""
+        if not isinstance(q, str) or not winsys.canonical(q) or not under(ncase(q), self.n_root):
+            return False
+        if rules.protected(self.env, q) or ncase(q) in self.env.never:
+            return False
+        try:
+            sq = os.stat(ext(q), follow_symlinks=False)
+            if rules.link_between(self.root, q):
+                return False
+        except OSError:
+            return False
+        if (sq.st_file_attributes & (REPARSE | PLACEHOLDER) or not stat.S_ISREG(sq.st_mode)
+                or sq.st_size != st.st_size or (sq.st_dev, sq.st_ino) == (st.st_dev, st.st_ino)):
+            return False
+        return folder_area(self.env, os.path.dirname(q)) == (None, ()) and file_hash(q, sq.st_size, False) == h
 
     def rule_large_old(self, gid, p, item, st, latest):
         if not self.same_file(p, item, st):
@@ -1017,6 +1043,9 @@ MB = 1024 * 1024
 REPARSE = 0x400  # junction, symlink or mount point: never followed, never offered
 PLACEHOLDER = 0x400000 | 0x40000 | 0x1000  # cloud placeholder: reading it downloads it
 TEMP_DAYS, PROJECT_DAYS = 7, 14
+# the large-file rule's least size and age: --large-mb and --large-days can only raise them, and
+# clean holds every report to them, whatever the report says
+LARGE_MB_MIN, LARGE_DAYS_MIN = 500, 180
 
 SAFETY = {"safe": "Safe", "redo": "Easy to get back", "check": "Your call"}
 SAFETY_ORDER = ("safe", "redo", "check")

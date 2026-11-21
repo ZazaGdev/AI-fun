@@ -428,7 +428,7 @@ def cmd_clean(a, env=None, win=None):
             ok.append((gid, item, size, ident))
     ok, no_bin, warnings = clean.bin_check(ok, win)
     left += no_bin
-    days = clean.setting(report, "large_days", 180)
+    days = checker.large_days
     named = set(items)  # listed one by one in what clean prints; a group named whole shows its first 10
     if not a.yes:
         print("\n".join(["Dry run: nothing has been changed.", ""]
@@ -452,6 +452,16 @@ def not_negative(text):
     return v
 
 
+def at_least(least):
+    """An argparse type for a threshold that can only be raised: a number of `least` or more."""
+    def number(text):
+        v = not_negative(text)
+        if v < least:
+            raise argparse.ArgumentTypeError("must be %g or more" % least)
+        return v
+    return number
+
+
 def parser():
     ap = argparse.ArgumentParser(prog="disk_cleanup.py", description="List what could be cleaned up on a Windows "
                                  "drive or folder, grouped by kind, with sizes and how safe each group is.")
@@ -462,8 +472,10 @@ def parser():
     sc.add_argument("--out", help="folder for the reports (default %%USERPROFILE%%\\disk-cleanup)")
     sc.add_argument("--workers", type=int, default=scan.MAX_WORKERS, help="threads that read the disk, 1 to 4")
     sc.add_argument("--dupe-min-mb", type=not_negative, default=1.0, help="smallest file to compare for duplicates")
-    sc.add_argument("--large-mb", type=not_negative, default=500.0, help="smallest file to list as large")
-    sc.add_argument("--large-days", type=not_negative, default=180.0, help="days unchanged for a large file")
+    sc.add_argument("--large-mb", type=at_least(rules.LARGE_MB_MIN), default=float(rules.LARGE_MB_MIN),
+                    help="smallest file to list as large, %g or more" % rules.LARGE_MB_MIN)
+    sc.add_argument("--large-days", type=at_least(rules.LARGE_DAYS_MIN), default=float(rules.LARGE_DAYS_MIN),
+                    help="days unchanged for a large file, %g or more" % rules.LARGE_DAYS_MIN)
     cl = sub.add_parser("clean", help="move the groups or items you ask for, from a scan report, to the Recycle Bin")
     cl.add_argument("report", help="the scan-*.json file the scan wrote")
     cl.add_argument("--groups", default="", help="group numbers or names from the summary, such as 1,3,temp")

@@ -17,6 +17,9 @@ MB = 1024 * 1024
 REPARSE = 0x400  # junction, symlink or mount point: never followed, never offered
 PLACEHOLDER = 0x400000 | 0x40000 | 0x1000  # cloud placeholder: reading it downloads it
 TEMP_DAYS, PROJECT_DAYS = 7, 14
+# the large-file rule's least size and age: --large-mb and --large-days can only raise them, and
+# clean holds every report to them, whatever the report says
+LARGE_MB_MIN, LARGE_DAYS_MIN = 500, 180
 
 SAFETY = {"safe": "Safe", "redo": "Easy to get back", "check": "Your call"}
 SAFETY_ORDER = ("safe", "redo", "check")

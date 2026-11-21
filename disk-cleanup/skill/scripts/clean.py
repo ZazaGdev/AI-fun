@@ -230,8 +230,10 @@ class Checker:
     def __init__(self, env, report, now, chosen, processes):
         self.env, self.now, self.root = env, now, report["root"]
         self.n_root = ncase(self.root)
-        self.large_min = setting(report, "large_mb", 500) * MB
-        self.large_age = setting(report, "large_days", 180) * DAY
+        # a report can only raise the large-file rule's size and age, never lower them
+        self.large_min = max(setting(report, "large_mb", rules.LARGE_MB_MIN), rules.LARGE_MB_MIN) * MB
+        self.large_days = max(setting(report, "large_days", rules.LARGE_DAYS_MIN), rules.LARGE_DAYS_MIN)
+        self.large_age = self.large_days * DAY
         self.selected = {ncase(i["path"]) for _, i in chosen if isinstance(i.get("path"), str)}
         self.processes = {p.lower() for p in processes}
         self.newest = {}  # outermost project (ncase): its newest change, read once per run
@@ -373,21 +375,33 @@ class Checker:
             return CHANGED
         chosen_copy = False
         for q in item.get("same_as") if isinstance(item.get("same_as"), list) else []:
-            if not isinstance(q, str) or not winsys.canonical(q) or not under(ncase(q), self.n_root):
-                continue
-            try:
-                sq = os.stat(ext(q), follow_symlinks=False)
-            except OSError:
-                continue
-            if (sq.st_file_attributes & (REPARSE | PLACEHOLDER) or not stat.S_ISREG(sq.st_mode)
-                    or sq.st_size != st.st_size or (sq.st_dev, sq.st_ino) == (st.st_dev, st.st_ino)
-                    or file_hash(q, sq.st_size, False) != h):
+            if not self.other_copy(q, st, h):
                 continue
             if self.chosen(q):
                 chosen_copy = True
                 continue
             return None  # a copy stays
         return KEEP_ONE if chosen_copy else NO_COPY
+
+    def other_copy(self, q, st, h):
+        """True when `q` is another copy of the file (`st`, full hash `h`) in a place the item
+        itself could be in: its one plain spelling, inside the root, not protected or never
+        removed, no link on the way, in a user area, the same size and hash, and not the same file
+        (a hard link)."""
+        if not isinstance(q, str) or not winsys.canonical(q) or not under(ncase(q), self.n_root):
+            return False
+        if rules.protected(self.env, q) or ncase(q) in self.env.never:
+            return False
+        try:
+            sq = os.stat(ext(q), follow_symlinks=False)
+            if rules.link_between(self.root, q):
+                return False
+        except OSError:
+            return False
+        if (sq.st_file_attributes & (REPARSE | PLACEHOLDER) or not stat.S_ISREG(sq.st_mode)
+                or sq.st_size != st.st_size or (sq.st_dev, sq.st_ino) == (st.st_dev, st.st_ino)):
+            return False
+        return folder_area(self.env, os.path.dirname(q)) == (None, ()) and file_hash(q, sq.st_size, False) == h
 
     def rule_large_old(self, gid, p, item, st, latest):
         if not self.same_file(p, item, st):

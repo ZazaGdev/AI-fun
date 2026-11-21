@@ -90,10 +90,11 @@ class ScanCommand(unittest.TestCase):
     def tearDownClass(cls):
         cls.pc.cleanup()
 
+    @mock.patch.object(rules, "LARGE_MB_MIN", 0.2)  # 200 KB, so the fixture's 300 KB files count as large
     def test_scan_writes_both_reports_and_prints_the_summary(self):
         for f in glob.glob(os.path.join(self.pc.out, "scan-*")):
             os.remove(f)  # the fixture's own report folder
-        code, out, err = run(["scan", self.pc.C, "--dupe-min-mb", "0.01", "--large-mb", "0.2"], env=self.pc.env(),
+        code, out, err = run(["scan", self.pc.C, "--dupe-min-mb", "0.01"], env=self.pc.env(),
                              win=FakeWin(running={"chrome.exe"}))
         self.assertEqual(code, 0, err)
         lines = out.splitlines()
@@ -166,6 +167,15 @@ class ScanCommand(unittest.TestCase):
             self.assertEqual(run(["scan", self.pc.C, flag, value], env=self.pc.env(), win=FakeWin())[0], 2, value)
         self.assertEqual(run(["scan", "\\\\.\\C:"], env=self.pc.env(), win=FakeWin())[0], 2)
         self.assertEqual(run(["clean-up", "x"], env=self.pc.env(), win=FakeWin())[0], 2)
+
+    def test_the_large_file_thresholds_can_only_be_raised(self):
+        for flag, value in (("--large-mb", "499"), ("--large-mb", "0.2"), ("--large-days", "179"),
+                            ("--large-days", "0")):
+            self.assertEqual(run(["scan", self.pc.C, flag, value], env=self.pc.env(), win=FakeWin())[0], 2, value)
+        a = dc.parser().parse_args(["scan", "C:\\", "--large-mb", "1000", "--large-days", "365"])
+        self.assertEqual((a.large_mb, a.large_days), (1000, 365))
+        a = dc.parser().parse_args(["scan", "C:\\"])
+        self.assertEqual((a.large_mb, a.large_days), (rules.LARGE_MB_MIN, rules.LARGE_DAYS_MIN))
 
     def test_a_root_spelled_another_way_scans_the_real_folder(self):
         def items(argv_root):

@@ -3,6 +3,7 @@ moves (exactly what was picked, through a fake Recycle Bin), and every check it 
 opt-in test moves one tiny made-up file to the real Recycle Bin."""
 import contextlib
 import glob
+import hashlib
 import io
 import json
 import os
@@ -22,8 +23,16 @@ import disk_cleanup as dc
 import rules
 import winsys
 
-SMALL = ["--dupe-min-mb", "0.01", "--large-mb", "0.2"]
+SMALL = ["--dupe-min-mb", "0.01"]
 CODE = U + "code\\"
+
+
+def setUpModule():
+    # the large-file rule's least size, 200 KB here so the fixture can stay small (its large files are
+    # 300 KB); the scan's --large-mb can only raise it, and clean holds every report to it
+    patch = mock.patch.object(rules, "LARGE_MB_MIN", 0.2)
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
 
 
 def run(argv, **kw):
@@ -337,6 +346,42 @@ class Moves(unittest.TestCase):
             item = next(i for g in report["groups"] for i in g["items"] if i["path"] == p)
             self.assertIn("\n      #%d  %s  %s\n" % (item["n"], dc.size_text(item["size"]), p), text)
 
+    def forged(self, gid, items, **settings):
+        """A report no scan wrote, with only the keys clean reads, made now."""
+        report = {"tool": "disk-cleanup", "version": 1, "created_ts": time.time(), "root": self.pc.C,
+                  "profile": self.pc.profile, "groups": [{"n": 1, "id": gid, "items": items}]}
+        if settings:
+            report["settings"] = settings
+        return save(report, os.path.join(self.pc.out, "forged-%s.json" % uuid.uuid4().hex[:8]))
+
+    def test_a_report_cannot_lower_the_large_file_rule(self):
+        small = self.pc.p(U + "Documents\\report.docx")                           # 2 KB, 400 days old
+        today = self.pc.file(U + "Pictures\\made-a-minute-ago.jpg", 300 * KB)     # large enough, but new
+        items = []
+        for n, p in enumerate((small, today), 1):
+            st = os.stat(p)
+            items.append({"n": n, "path": p, "kind": "file", "size": st.st_size, "mtime": st.st_mtime})
+        js = self.forged("large-old", items, large_mb=0, large_days=0)
+        out, win = self.clean(js, "--items", "1,2", "--yes")
+        self.assertEqual((win.moved, left_reasons(out)), ([], {1: clean.NO_RULE, 2: clean.NO_RULE}))
+
+    def test_a_duplicate_counts_only_a_copy_in_a_place_it_could_be_offered_from(self):
+        places = [("C\\$Recycle.Bin\\S-1-5-21-1\\$R0AB12C.jpg", clean.NO_COPY),  # in the Recycle Bin
+                  (U + "OneDrive\\copy.jpg", clean.NO_COPY),                      # a synced folder
+                  (CODE + "old-app\\assets\\copy.jpg", clean.NO_COPY),            # inside a project
+                  (LO + "copy.jpg", clean.NO_COPY),                               # AppData
+                  (U + "Documents\\copy.jpg", None)]                              # the user's own folder: it stays
+        items = []
+        for n, (where, _) in enumerate(places, 1):
+            data = os.urandom(40 * KB)
+            photo, copy = self.pc.file(U + "Pictures\\photo-%d.jpg" % n, data=data), self.pc.file(where, data=data)
+            st = os.stat(photo)
+            items.append({"n": n, "path": photo, "kind": "file", "size": st.st_size, "mtime": st.st_mtime, "set": n,
+                          "hash": hashlib.sha256(data).hexdigest(), "same_as": [copy], "suggest_keep": False})
+        out, win = self.clean(self.forged("duplicates", items), "--items", "1,2,3,4,5", "--yes")
+        self.assertEqual(left_reasons(out), {n: why for n, (_, why) in enumerate(places, 1) if why})
+        self.assertEqual(win.moved, [self.pc.p(U + "Pictures\\photo-5.jpg")])
+
     def test_every_copy_picked_keeps_one(self):
         js, report = scan_report(self.pc)
         copies = [i["n"] for g in report["groups"] if g["id"] == "duplicates" for i in g["items"]]
@@ -445,7 +490,8 @@ class Moves(unittest.TestCase):
         save(report, js)
         out, win = self.clean(js, "--items", "%d,%d" % (dup, folder), "--yes")
         self.assertEqual(win.moved, [])
-        self.assertEqual(left_reasons(out), {dup: clean.KEEP_ONE, folder: clean.NO_RULE})  # (old-folder is new now)
+        # every chosen folder is in a place no copy counts in (here AppData), so the photo has none to keep
+        self.assertEqual(left_reasons(out), {dup: clean.NO_COPY, folder: clean.NO_RULE})  # (old-folder is new now)
 
     def test_an_item_in_use_is_tried_again_then_left_out(self):
         js, report = scan_report(self.pc)
