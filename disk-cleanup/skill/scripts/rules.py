@@ -222,14 +222,14 @@ def dropbox_folders(info_files):
 
 def names(path):
     """Lower-case names of the files and of the folders directly in `path`. Links and online-only
-    files count: they still mark a program or a project. Two empty sets when it cannot be read."""
+    files count: they still mark a program or a project. None when it cannot be read."""
     files, dirs = set(), set()
     try:
         with os.scandir(ext(path)) as it:
             for e in it:
                 (dirs if e.is_dir(follow_symlinks=False) else files).add(e.name.lower())
     except OSError:
-        pass
+        return None
     return files, dirs
 
 
@@ -415,15 +415,19 @@ def chain(env, path):
     return out[::-1]
 
 
-def context(env, path):
+def context(env, path, strict=False):
     """How the walker treats folder `path`, worked out from its drive root down the way the walk
     would meet it. Returns (kind, projects, stop): kind None when it is walked, else the area it is
     in; projects are the folders above it that start project areas; stop is the folder the area
-    starts at (for INSIDE, the item a rule offers whole, which may be `path` itself)."""
+    starts at (for INSIDE, the item a rule offers whole, which may be `path` itself). A folder
+    above it that cannot be read counts as empty, or with strict (the clean step) as SKIP."""
     folders, projects = chain(env, path), ()
     for parent, p in zip(folders, folders[1:]):
         np = ncase(parent)
-        files, dirs = names(parent)
+        got = names(parent)
+        if got is None and strict:
+            return SKIP, projects, parent
+        files, dirs = got or (set(), set())
         at_root, at_profile = env.is_root(np), np in env.n_profiles
         if is_synced_root(files, dirs):
             return SYNCED, projects, parent

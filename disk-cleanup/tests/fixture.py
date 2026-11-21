@@ -38,13 +38,31 @@ _k32.GetFileAttributesW.restype = ctypes.c_ulong
 
 
 class FakeWin:
-    """Stands in for winsys.WinSys: a made-up process list and Recycle Bin."""
+    """Stands in for winsys.WinSys: a made-up process list and Recycle Bin. recycle() takes the same
+    gate as the real call (winsys.from_list), then moves each path into `bin_dir`, a folder of the
+    made-up PC, unless it is one of `stuck` (in use)."""
 
-    def __init__(self, running=(), bin_size=0, bin_items=0, max_mb=1000, nuke=False, policy=False, drive=3):
+    def __init__(self, running=(), bin_size=0, bin_items=0, max_mb=1000, nuke=False, policy=False, drive=3,
+                 bin_dir=None, stuck=()):
         self.running = {p.lower() for p in running}
         self.bin = (bin_size, bin_items)
         self.settings = {"max_mb": max_mb, "nuke": nuke, "policy": policy}
         self.drive = drive
+        self.bin_dir, self.stuck = bin_dir, {os.path.normcase(p) for p in stuck}
+        self.calls, self.moved = [], []
+
+    def recycle(self, paths):
+        import winsys
+        winsys.from_list(paths)
+        self.calls.append(list(paths))
+        if self.bin_dir is None:
+            raise AssertionError("this test does not expect anything to be moved")
+        os.makedirs(self.bin_dir, exist_ok=True)
+        for p in paths:
+            if os.path.normcase(p) not in self.stuck and os.path.lexists(ext(p)):
+                os.rename(ext(p), ext(os.path.join(self.bin_dir, "%d-%s" % (len(self.moved), os.path.basename(p)))))
+                self.moved.append(p)
+        return 0, False
 
     def processes(self):
         return set(self.running)

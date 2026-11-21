@@ -1,12 +1,15 @@
 """disk-cleanup: scan a Windows drive or folder and list what can be removed, grouped by kind,
-with sizes and how safe each group is.
+with sizes and how safe each group is; then move only what you pick to the Recycle Bin.
 
 Usage:
   python disk_cleanup.py scan <path> [--out DIR] [--workers N] [--dupe-min-mb 1] [--large-mb 500] [--large-days 180]
+  python disk_cleanup.py clean <report.json> [--groups 1,3,temp] [--items 12,17] [--skip 40] [--yes]
 
 scan only reads. It writes scan-YYYYMMDD-HHMMSS.json and scan-YYYYMMDD-HHMMSS.txt into --out
-(default %USERPROFILE%\\disk-cleanup) and prints a summary. Windows only, Python 3.8 or newer.
-Exit codes: 0 done, 2 bad arguments, 3 not Windows.
+(default %USERPROFILE%\\disk-cleanup) and prints a summary. clean checks every chosen item again;
+without --yes it is a dry run that changes nothing, with --yes it moves them to the Recycle Bin
+and writes clean-YYYYMMDD-HHMMSS.txt next to the report. Windows only, Python 3.8 or newer.
+Exit codes: 0 done, 2 bad arguments or an unusable report, 3 not Windows.
 """
 import argparse
 import datetime
@@ -17,9 +20,12 @@ import re
 import sys
 import time
 
+import clean
 import rules
 import scan
 import winsys
+
+LEFT_SHOWN = 30  # skipped items printed by clean; the log has all of them
 
 # labels too long for the summary's column, as in the plan's sample
 SHORT = {"downloads": "Old installers and unfinished downloads", "duplicates": "Duplicate files (pick which copies)"}
@@ -325,6 +331,104 @@ def cannot_write(folder, err):
     return 2
 
 
+# ---- clean ----
+
+def moved_lines(head, entries, days):
+    """Per group, what moves (or would), then the total."""
+    if not entries:
+        return [head, "   Nothing."]
+    by = {}
+    for gid, _, size in entries:
+        n, s = by.get(gid, (0, 0))
+        by[gid] = (n + 1, s + size)
+    out = [head]
+    out += ["   %s%8s   %s" % (pad(rules.label(gid, days), 44), size_text(by[gid][1]), plural(by[gid][0], "item"))
+            for gid in rules.GROUP_ORDER if gid in by]
+    out.append("   In all: about %s in %s." % (size_text(sum(e[2] for e in entries)), plural(len(entries), "item")))
+    return out
+
+
+def left_line(entry):
+    _, item, why = entry
+    return "   #%s  %s  (%s)" % (item.get("n", "?"), item.get("path", "?"), why)
+
+
+def left_lines(left, shown=LEFT_SHOWN):
+    if not left:
+        return []
+    out = ["", "Left out, with the reason (%s):" % num(len(left))] + [left_line(e) for e in left[:shown]]
+    if shown and len(left) > shown:
+        out.append("   and %s more" % num(len(left) - shown))
+    return out
+
+
+def warning_lines(warnings):
+    out = []
+    for drive, total, room in warnings:
+        out += ["", "WARNING: The Recycle Bin on %s has room for %s, and this moves %s. Windows will permanently "
+                    "delete the oldest items already in it to make room." % (drive.rstrip("\\"), size_text(room),
+                                                                              size_text(total))]
+    return out
+
+
+def write_log(report_path, moved, left, warnings, days):
+    """clean-YYYYMMDD-HHMMSS.txt next to the report: every moved and every left-out item."""
+    path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+    lines = ["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
+             "Report: " + report_path, ""]
+    lines += moved_lines("Moved to the Recycle Bin:", moved, days)
+    lines += ["   %s  %s" % (size_text(e[2]), e[1]["path"]) for e in moved]
+    lines += left_lines(left, shown=None) + warning_lines(warnings)
+    try:
+        with open(path, "w", encoding="utf-8", errors="replace") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError as e:
+        return None, e
+    return path, None
+
+
+def cmd_clean(a, env=None, win=None):
+    now = time.time()
+    report_path = os.path.abspath(a.report)
+    if env is None:
+        env = rules.Env.from_system()
+    win = win or winsys.WinSys()
+    try:
+        groups = [t.strip() for t in a.groups.split(",") if t.strip()]
+        items, skip = clean.numbers(a.items, "an item"), clean.numbers(a.skip, "an item")
+        if not groups and not items:
+            raise clean.Refused("Say what to remove: --groups with group numbers or names, or --items with "
+                                "item numbers from the full list.")
+        report = clean.load(report_path, env, now)
+        chosen = clean.unnest(clean.select(report, groups, items, skip))
+    except clean.Refused as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    checker = clean.Checker(env, report, now, chosen, win.processes())
+    ok, left = [], []
+    for gid, item in chosen:
+        why, size = checker.still_matches(gid, item)
+        if why:
+            left.append((gid, item, why))
+        else:
+            ok.append((gid, item, size))
+    ok, no_bin, warnings = clean.bin_check(ok, win)
+    left += no_bin
+    days = clean.setting(report, "large_days", 180)
+    if not a.yes:
+        print("\n".join(["Dry run: nothing has been changed.", ""] + moved_lines("Would move to the Recycle Bin:", ok, days)
+                        + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
+        return 0
+    moved, failed = clean.move(ok, win)
+    left += failed
+    log, err = write_log(report_path, moved, left, warnings, days)
+    out = moved_lines("Moved to the Recycle Bin:", moved, days) + left_lines(left) + warning_lines(warnings)
+    out += ["", "The space comes back when you empty the Recycle Bin. Until then you can restore anything from it."]
+    out.append("The log of this run: " + log if log else "Could not write the log: %s" % (err.strerror or err))
+    print("\n".join(out))
+    return 0
+
+
 def not_negative(text):
     v = float(text)
     if not math.isfinite(v) or v < 0:
@@ -344,6 +448,12 @@ def parser():
     sc.add_argument("--dupe-min-mb", type=not_negative, default=1.0, help="smallest file to compare for duplicates")
     sc.add_argument("--large-mb", type=not_negative, default=500.0, help="smallest file to list as large")
     sc.add_argument("--large-days", type=not_negative, default=180.0, help="days unchanged for a large file")
+    cl = sub.add_parser("clean", help="move what you pick from a scan report to the Recycle Bin")
+    cl.add_argument("report", help="the scan-*.json file the scan wrote")
+    cl.add_argument("--groups", default="", help="group numbers or names from the summary, such as 1,3,temp")
+    cl.add_argument("--items", default="", help="item numbers from the full list, such as 12,17")
+    cl.add_argument("--skip", default="", help="item numbers to leave out")
+    cl.add_argument("--yes", action="store_true", help="really move them; without it nothing is changed")
     return ap
 
 
@@ -357,6 +467,8 @@ def main(argv=None, env=None, win=None):
     a = parser().parse_args(argv)
     if a.cmd == "scan":
         return cmd_scan(a, env, win)
+    if a.cmd == "clean":
+        return cmd_clean(a, env, win)
     return 2
 
 
