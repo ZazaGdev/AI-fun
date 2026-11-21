@@ -312,6 +312,49 @@ class Moves(unittest.TestCase):
             text = f.read()
         for p in want:
             self.assertIn(p, text)
+        self.assertRegex(text, r"\nAbout to move to the Recycle Bin:\n(.|\n)*\nBatch 1 of 1, done:\n(.|\n)*\nFinished\.\n"
+                               r"Moved to the Recycle Bin:\n")
+
+    def test_a_run_cut_off_still_leaves_a_log_of_what_moved(self):
+        for k in range(250):
+            self.pc.age(self.pc.file(LO + "Temp\\batch-%03d.tmp" % k), 400)
+        js, report = scan_report(self.pc)
+
+        class Stopped(Exception):
+            pass
+
+        class CutOff(FakeWin):
+            def recycle(self, paths):
+                if self.calls:
+                    raise Stopped("the run is stopped during its second batch")
+                return FakeWin.recycle(self, paths)
+        win = CutOff(bin_dir=self.bin)
+        with self.assertRaises(Stopped):
+            run(["clean", js, "--groups", "temp", "--yes"], env=self.pc.env(), win=win)
+        logs = glob.glob(os.path.join(os.path.dirname(js), "clean-*.txt"))
+        self.assertEqual(len(logs), 1)
+        with open(logs[0], encoding="utf-8") as f:
+            text = f.read()
+        about, done = text.split("\nBatch 1 of 2, done:\n")
+        temp = [i for g in report["groups"] if g["id"] == "temp" for i in g["items"] if not i["path"].endswith("deep-old")]
+        for i in temp:
+            self.assertIn("  %s\n" % i["path"], about)  # what was about to move, written before the first move
+        self.assertEqual(len(win.moved), 200)
+        for p in win.moved:
+            self.assertRegex(done, r"   moved     #\d+  \S+ \S+  %s\n" % re.escape(p))  # written right after its batch
+        self.assertNotIn("Finished.", text)
+
+    def test_without_a_log_nothing_moves(self):
+        js, report = scan_report(self.pc)
+
+        def cannot(log, lines, mode="a"):
+            log.error = OSError(13, "Access is denied")
+            return False
+        win = FakeWin(bin_dir=self.bin)
+        with mock.patch.object(dc.Log, "add", cannot):
+            code, out, err = run(["clean", js, "--groups", "temp", "--yes"], env=self.pc.env(), win=win)
+        self.assertEqual((code, win.calls), (2, []))
+        self.assertIn("Cannot write the log of this run to %s: Access is denied. Nothing was moved." % self.pc.out, err)
 
     def test_what_clean_prints_names_each_item_so_a_new_report_shows_its_own_files(self):
         # item numbers are positions in one report: after a new scan the same numbers name other files

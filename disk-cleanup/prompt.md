@@ -29,7 +29,7 @@ Wherever this prompt says ~, use the full path of my home folder (such as C:\Use
 2. Write FILE 1 to `~/disk-cleanup/tool/disk_cleanup.py`, FILE 2 to `~/disk-cleanup/tool/clean.py`, FILE 3 to `~/disk-cleanup/tool/rules.py`, FILE 4 to `~/disk-cleanup/tool/scan.py` and FILE 5 to `~/disk-cleanup/tool/winsys.py`. Copy the text between each BEGIN line and END line exactly, character for character, without those two lines. Do not shorten, reformat, translate, fix or improve anything. Write each file in one go.
 
 3. Check all five copies by running this:
-   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','45eddc2d153e6772eac2f67a76b04ca10652a0d254e569446d33880fe27efee0'),('clean.py','c5ec2d5e5a0454d5d94bf9091487db3788c08a0f493b8ecc66dbf44428b06417'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
+   python -c "import hashlib,pathlib;h=pathlib.Path.home()/'disk-cleanup'/'tool';[print(f,'OK' if hashlib.sha256(chr(10).join(l.rstrip() for l in (h/f).read_text(encoding='utf-8').replace(chr(13)+chr(10),chr(10)).strip().split(chr(10))).encode()).hexdigest()==d else 'MISMATCH') for f,d in [('disk_cleanup.py','7731470f4db31beb082ae0287102632fab806404f004f49e1eea8ea043fda472'),('clean.py','5ef015450aa043dab86fa2684ba76af464f27db7959a8b9066f3cac68c1bac5e'),('rules.py','d53f772733afe242d9a6dcc1b92a80318e74893d57f785eeba8c85359fa31379'),('scan.py','a8be973a96a57590db67fcf38d85b7146e84da4b5f0296a9e130fd2a04107b8b'),('winsys.py','bc60b35669970c0363b004d481364fcadbaa10837bb5e4f2d849479119231303')]]"
    It must print OK for all five files. If a file prints MISMATCH, write that file again from the text below and run the check again. Only go on when all five say OK.
 
 4. Run the scan, with the path from the first line in single quotes: `python ~/disk-cleanup/tool/disk_cleanup.py scan '<path>'`. Run it in the background or with a 10-minute timeout: a whole drive can take several minutes. It only reads: names, sizes and dates in that folder, and the contents of possible duplicates there to compare them. To know what to leave alone, it also reads where Dropbox, OneDrive and other sync clients keep their folders (Dropbox's info.json and a few Windows registry keys), the names of the folders in my profile and the top of my AppData, the Recycle Bin's settings, and which programs are running. It writes its two reports to ~/disk-cleanup/ and sends nothing anywhere.
@@ -51,9 +51,9 @@ Usage:
 
 scan only reads. It writes scan-YYYYMMDD-HHMMSS.json and scan-YYYYMMDD-HHMMSS.txt into --out
 (default %USERPROFILE%\\disk-cleanup) and prints a summary. clean checks every chosen item again;
-without --yes it is a dry run that changes nothing, with --yes it moves them to the Recycle Bin
-and writes clean-YYYYMMDD-HHMMSS.txt next to the report. Windows only, Python 3.8 or newer.
-Exit codes: 0 done, 2 bad arguments or an unusable report, 3 not Windows.
+without --yes it is a dry run that changes nothing, with --yes it moves them to the Recycle Bin,
+writing clean-YYYYMMDD-HHMMSS.txt next to the report as it goes. Windows only, Python 3.8 or newer.
+Exit codes: 0 done, 2 bad arguments, an unusable report or a log that cannot be written, 3 not Windows.
 """
 import argparse
 import datetime
@@ -428,19 +428,30 @@ def warning_lines(warnings):
     return out
 
 
-def write_log(report_path, moved, left, warnings, days):
-    """clean-YYYYMMDD-HHMMSS.txt next to the report: every moved and every left-out item."""
-    path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-    lines = ["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
-             "Report: " + report_path, ""]
-    lines += moved_lines("Moved to the Recycle Bin:", moved, days, shown=None)
-    lines += left_lines(left, shown=None) + warning_lines(warnings)
-    try:
-        with open(path, "w", encoding="utf-8", errors="replace") as f:
-            f.write("\n".join(lines) + "\n")
-    except OSError as e:
-        return None, e
-    return path, None
+class Log:
+    """clean-YYYYMMDD-HHMMSS.txt next to the report, written as the run goes: made before the first
+    move with what is about to move, then each batch's results added right after that batch, so a
+    run that is cut off still leaves a record of what moved."""
+
+    def __init__(self, report_path, batches):
+        self.path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+        self.error, self.done, self.batches = None, 0, batches
+
+    def add(self, lines, mode="a"):
+        """Write `lines` at once; after a failure nothing more is tried. True while all went in."""
+        if self.error is None:
+            try:
+                with open(self.path, mode, encoding="utf-8", errors="replace") as f:
+                    f.write("\n".join(lines) + "\n")
+            except OSError as e:
+                self.error = e
+        return self.error is None
+
+    def batch(self, moved, left):
+        self.done += 1
+        self.add(["", "Batch %d of %d, done:" % (self.done, self.batches)]
+                 + ["   moved     #%d  %s  %s" % (e[1]["n"], size_text(e[2]), e[1]["path"]) for e in moved]
+                 + ["   left out  #%s  %s  (%s)" % (i.get("n", "?"), i.get("path", "?"), why) for _, i, why in left])
 
 
 def cmd_clean(a, env=None, win=None):
@@ -478,12 +489,21 @@ def cmd_clean(a, env=None, win=None):
                         + moved_lines("Would move to the Recycle Bin:", ok, days, named)
                         + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
         return 0
-    moved, failed = clean.move(ok, win)
+    log = Log(report_path, -(-len(ok) // clean.BATCH))
+    if not log.add(["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    "Report: " + report_path, ""] + moved_lines("About to move to the Recycle Bin:", ok, days, shown=None)
+                   + left_lines(left, shown=None) + warning_lines(warnings), "w"):
+        print("Cannot write the log of this run to %s: %s. Nothing was moved." % (
+            os.path.dirname(report_path), log.error.strerror or log.error), file=sys.stderr)
+        return 2  # without a log, a run that is cut off would leave no record of what moved
+    moved, failed = clean.move(ok, win, log.batch)
     left += failed
-    log, err = write_log(report_path, moved, left, warnings, days)
+    log.add(["", "Finished."] + moved_lines("Moved to the Recycle Bin:", moved, days, shown=None)
+            + left_lines(left, shown=None))
     out = moved_lines("Moved to the Recycle Bin:", moved, days, named) + left_lines(left) + warning_lines(warnings)
     out += ["", "The space comes back when you empty the Recycle Bin. Until then you can restore anything from it."]
-    out.append("The log of this run: " + log if log else "Could not write the log: %s" % (err.strerror or err))
+    out.append("The log of this run: " + log.path if log.error is None
+               else "Could not write all of the log %s: %s" % (log.path, log.error.strerror or log.error))
     print("\n".join(out))
     return 0
 
@@ -1050,18 +1070,22 @@ def move_batch(batch, win):
     return moved, left, False
 
 
-def move(ok, win):
+def move(ok, win, after=None):
     """Move the checked items to the Recycle Bin, up to 200 paths a call. An item counts as moved
     only when what was checked is no longer at its path. One still there is tried once more on
     its own; something new at the path is never touched. A call that comes back cancelled stops
-    the run: none of its paths is tried again and no other call is made. Returns (moved, left)."""
+    the run: none of its paths is tried again and no other call is made. after(moved, left) gets
+    each batch's results as soon as that batch is done. Returns (moved, left)."""
     moved, left = [], []
     for start in range(0, len(ok), BATCH):
         done, out, stopped = move_batch(ok[start:start + BATCH], win)
+        if stopped:
+            out += [(e[0], e[1], NOT_TRIED) for e in ok[start + BATCH:]]
         moved += done
         left += out
+        if after:
+            after(done, out)
         if stopped:
-            left += [(e[0], e[1], NOT_TRIED) for e in ok[start + BATCH:]]
             break
     return moved, left
 ----- END FILE 2 -----

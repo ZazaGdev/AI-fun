@@ -8,9 +8,9 @@ Usage:
 
 scan only reads. It writes scan-YYYYMMDD-HHMMSS.json and scan-YYYYMMDD-HHMMSS.txt into --out
 (default %USERPROFILE%\\disk-cleanup) and prints a summary. clean checks every chosen item again;
-without --yes it is a dry run that changes nothing, with --yes it moves them to the Recycle Bin
-and writes clean-YYYYMMDD-HHMMSS.txt next to the report. Windows only, Python 3.8 or newer.
-Exit codes: 0 done, 2 bad arguments or an unusable report, 3 not Windows.
+without --yes it is a dry run that changes nothing, with --yes it moves them to the Recycle Bin,
+writing clean-YYYYMMDD-HHMMSS.txt next to the report as it goes. Windows only, Python 3.8 or newer.
+Exit codes: 0 done, 2 bad arguments, an unusable report or a log that cannot be written, 3 not Windows.
 """
 import argparse
 import datetime
@@ -385,19 +385,30 @@ def warning_lines(warnings):
     return out
 
 
-def write_log(report_path, moved, left, warnings, days):
-    """clean-YYYYMMDD-HHMMSS.txt next to the report: every moved and every left-out item."""
-    path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
-    lines = ["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
-             "Report: " + report_path, ""]
-    lines += moved_lines("Moved to the Recycle Bin:", moved, days, shown=None)
-    lines += left_lines(left, shown=None) + warning_lines(warnings)
-    try:
-        with open(path, "w", encoding="utf-8", errors="replace") as f:
-            f.write("\n".join(lines) + "\n")
-    except OSError as e:
-        return None, e
-    return path, None
+class Log:
+    """clean-YYYYMMDD-HHMMSS.txt next to the report, written as the run goes: made before the first
+    move with what is about to move, then each batch's results added right after that batch, so a
+    run that is cut off still leaves a record of what moved."""
+
+    def __init__(self, report_path, batches):
+        self.path = os.path.join(os.path.dirname(report_path), "clean-%s.txt" % time.strftime("%Y%m%d-%H%M%S"))
+        self.error, self.done, self.batches = None, 0, batches
+
+    def add(self, lines, mode="a"):
+        """Write `lines` at once; after a failure nothing more is tried. True while all went in."""
+        if self.error is None:
+            try:
+                with open(self.path, mode, encoding="utf-8", errors="replace") as f:
+                    f.write("\n".join(lines) + "\n")
+            except OSError as e:
+                self.error = e
+        return self.error is None
+
+    def batch(self, moved, left):
+        self.done += 1
+        self.add(["", "Batch %d of %d, done:" % (self.done, self.batches)]
+                 + ["   moved     #%d  %s  %s" % (e[1]["n"], size_text(e[2]), e[1]["path"]) for e in moved]
+                 + ["   left out  #%s  %s  (%s)" % (i.get("n", "?"), i.get("path", "?"), why) for _, i, why in left])
 
 
 def cmd_clean(a, env=None, win=None):
@@ -435,12 +446,21 @@ def cmd_clean(a, env=None, win=None):
                         + moved_lines("Would move to the Recycle Bin:", ok, days, named)
                         + left_lines(left) + warning_lines(warnings) + ["", "To go ahead, run the same command with --yes."]))
         return 0
-    moved, failed = clean.move(ok, win)
+    log = Log(report_path, -(-len(ok) // clean.BATCH))
+    if not log.add(["disk-cleanup clean, %s" % datetime.datetime.now().isoformat(sep=" ", timespec="seconds"),
+                    "Report: " + report_path, ""] + moved_lines("About to move to the Recycle Bin:", ok, days, shown=None)
+                   + left_lines(left, shown=None) + warning_lines(warnings), "w"):
+        print("Cannot write the log of this run to %s: %s. Nothing was moved." % (
+            os.path.dirname(report_path), log.error.strerror or log.error), file=sys.stderr)
+        return 2  # without a log, a run that is cut off would leave no record of what moved
+    moved, failed = clean.move(ok, win, log.batch)
     left += failed
-    log, err = write_log(report_path, moved, left, warnings, days)
+    log.add(["", "Finished."] + moved_lines("Moved to the Recycle Bin:", moved, days, shown=None)
+            + left_lines(left, shown=None))
     out = moved_lines("Moved to the Recycle Bin:", moved, days, named) + left_lines(left) + warning_lines(warnings)
     out += ["", "The space comes back when you empty the Recycle Bin. Until then you can restore anything from it."]
-    out.append("The log of this run: " + log if log else "Could not write the log: %s" % (err.strerror or err))
+    out.append("The log of this run: " + log.path if log.error is None
+               else "Could not write all of the log %s: %s" % (log.path, log.error.strerror or log.error))
     print("\n".join(out))
     return 0
 

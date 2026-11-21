@@ -500,17 +500,21 @@ def move_batch(batch, win):
     return moved, left, False
 
 
-def move(ok, win):
+def move(ok, win, after=None):
     """Move the checked items to the Recycle Bin, up to 200 paths a call. An item counts as moved
     only when what was checked is no longer at its path. One still there is tried once more on
     its own; something new at the path is never touched. A call that comes back cancelled stops
-    the run: none of its paths is tried again and no other call is made. Returns (moved, left)."""
+    the run: none of its paths is tried again and no other call is made. after(moved, left) gets
+    each batch's results as soon as that batch is done. Returns (moved, left)."""
     moved, left = [], []
     for start in range(0, len(ok), BATCH):
         done, out, stopped = move_batch(ok[start:start + BATCH], win)
+        if stopped:
+            out += [(e[0], e[1], NOT_TRIED) for e in ok[start + BATCH:]]
         moved += done
         left += out
+        if after:
+            after(done, out)
         if stopped:
-            left += [(e[0], e[1], NOT_TRIED) for e in ok[start + BATCH:]]
             break
     return moved, left
