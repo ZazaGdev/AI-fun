@@ -107,7 +107,7 @@ class ScanDriveC(unittest.TestCase):
     def test_python_caches_and_virtual_environments(self):
         self.assertEqual(self.paths("py-cache"), {CODE + "py-app\\__pycache__", CODE + "py-app\\.pytest_cache"})
         self.assertEqual(group(self.report, "py-cache")["safety"], "safe")
-        self.assertEqual(self.paths("py-venv"), {CODE + "py-app\\.venv", U + "envs\\old-env"})
+        self.assertEqual(self.paths("py-venv"), {CODE + "py-app\\.venv", U + "envs\\old-env", CODE + "tool-proj\\tools\\venv"})
         self.assertEqual(skipped(self.pc, self.report, "py-venv"), {U + "envs\\new-env": rules.RECENT_VENV})
         g = group(self.report, "py-venv")
         self.assertEqual((g["safety"], g["note"]),
@@ -130,6 +130,12 @@ class ScanDriveC(unittest.TestCase):
         paths = item_paths(self.pc, self.report, "duplicates")
         for p in paths:
             self.assertFalse("hard" in p or "OneDrive" in p or "code" in p, p)
+
+    def test_svn_and_mercurial_working_copies_are_projects(self):
+        # their identical images are not duplicates and SVN's versioned empty folders are not offered
+        for p in [i["path"] for i in all_items(self.report)]:
+            r = rel(self.pc, p)
+            self.assertFalse(r.startswith(CODE + "svn-site") or r.startswith(CODE + "hg-site"), r)
 
     def test_large_old_files(self):
         self.assertEqual(self.paths("large-old"), {U + "Videos\\old-trip.mp4", CODE + "old-app\\assets\\intro.mp4"})
@@ -291,6 +297,12 @@ class ScanOtherRoots(unittest.TestCase):
                      CODE + "py-app\\.venv\\Lib", CODE + "dotnet-app\\bin\\Debug"):
             _, r = run_scan(self.pc, self.pc.p(root), **SMALL)
             self.assertEqual(r["groups"], [], root)
+
+    def test_venv_whose_project_reaches_above_the_root_is_left_out(self):
+        # the project (tool-proj) starts above the scanned folder, so its recent changes may lie outside it
+        _, r = run_scan(self.pc, self.pc.p(CODE + "tool-proj\\tools"), **SMALL)
+        self.assertIsNone(group(r, "py-venv"))
+        self.assertEqual(skipped(self.pc, r, "py-venv"), {CODE + "tool-proj\\tools\\venv": rules.OUTSIDE})
 
     def test_temp_pointing_at_a_drive_root_is_not_used(self):
         # (a TEMP not named like a temp folder is refused too; see test_rules, since this fixture

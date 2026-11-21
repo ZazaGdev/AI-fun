@@ -164,6 +164,7 @@ class PatternRules(unittest.TestCase):
         self.assertFalse(rules.holds_program({"setup.exe", "notes.txt"}))
         for files, dirs in [({"package.json"}, set()), ({"app.sln"}, set()), ({"x.uproject"}, set()),
                             ({"requirements.txt"}, set()), (set(), {".git"}), ({".git"}, set()),
+                            (set(), {".hg"}), (set(), {".svn"}),
                             (set(), {"assets", "projectsettings"}), ({"settings.gradle.kts"}, set())]:
             self.assertTrue(rules.is_project(files, dirs), (files, dirs))
         self.assertFalse(rules.is_project({"readme.md"}, {"assets"}))

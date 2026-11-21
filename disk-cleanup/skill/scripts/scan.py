@@ -443,11 +443,14 @@ class Scanner:
 
     def apply_recency(self):
         """A build folder or virtual environment of a project changed in the last 14 days is listed
-        as skipped. A virtual environment outside any project goes by its own dates."""
+        as skipped, and so is one whose project reaches above the scan root, since the walk did not
+        see all of it. A virtual environment outside any project goes by its own dates."""
         since = self.now - rules.PROJECT_DAYS * DAY
         for c in self.cands:
             if c["group"] in rules.BUILD_GROUPS and not c["skip"]:
-                if c["project"]:
+                if c["project"] and not rules.is_under(c["project"], self.root):
+                    c["skip"] = rules.OUTSIDE
+                elif c["project"]:
                     if self.recency.get(ncase(c["project"]), 0.0) > since:
                         c["skip"] = rules.RECENT
                 elif c["mtime"] > since:

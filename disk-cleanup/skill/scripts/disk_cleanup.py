@@ -169,7 +169,9 @@ LEFT_OUT = {rules.LINKS: ("folder that contains links to other folders", "folder
             rules.RECENT: ("build folder of a project changed in the last 14 days",
                            "build folders of projects changed in the last 14 days"),
             rules.RECENT_VENV: ("virtual environment changed in the last 14 days",
-                                "virtual environments changed in the last 14 days")}
+                                "virtual environments changed in the last 14 days"),
+            rules.OUTSIDE: ("virtual environment of a project partly outside the scanned folder",
+                            "virtual environments of projects partly outside the scanned folder")}
 
 
 def left_out_lines(report):

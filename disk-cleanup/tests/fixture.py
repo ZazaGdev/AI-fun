@@ -227,6 +227,17 @@ class PC:
         f(c + "repo\\.git\\HEAD", data=b"ref: refs/heads/main\n")
         f(c + "repo\\assets\\a.png", data=img)
         f(c + "repo\\assets\\b.png", data=img)
+        svn, hg = os.urandom(30 * KB), os.urandom(30 * KB)
+        f(c + "svn-site\\.svn\\wc.db")
+        f(c + "svn-site\\img\\a.png", data=svn)
+        f(c + "svn-site\\img\\b.png", data=svn)
+        d(c + "svn-site\\old\\empty\\inner")
+        f(c + "hg-site\\.hg\\store\\00changelog.i")
+        f(c + "hg-site\\a.jpg", data=hg)
+        f(c + "hg-site\\copy\\a.jpg", data=hg)
+        f(c + "tool-proj\\requirements.txt", data=b"requests\n")
+        f(c + "tool-proj\\tools\\venv\\pyvenv.cfg", data=b"home = C:\\Python313\n")
+        f(c + "tool-proj\\tools\\venv\\Lib\\site-packages\\z.py", KB)
 
         # other people's profiles
         f("C\\Users\\other\\AppData\\Local\\Temp\\old.tmp", KB)

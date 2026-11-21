@@ -43,6 +43,7 @@ PARTLY = "parts of it could not be read"
 HOLDS = "holds a folder this tool never removes"
 RECENT = "project changed in the last 14 days"
 RECENT_VENV = "changed in the last 14 days"
+OUTSIDE = "its project is partly outside the scanned folder"
 
 # what the walker does with a folder it meets, besides walking it
 SKIP, WINDOWS, PROGRAM, APPDATA, SYNCED, DOT, KNOWN = "skip", "windows", "program", "appdata", "synced", "dot", "known"
@@ -321,9 +322,10 @@ def holds_program(files):
 
 
 def is_project(files, dirs):
-    """A project marker among the lower-case file and folder names directly in a folder."""
+    """A project marker among the lower-case file and folder names directly in a folder. A .git,
+    .hg or .svn (folder, or a .git file of a worktree) marks one too."""
     return (bool(files & MARKERS) or any(os.path.splitext(f)[1] in MARKER_EXTS for f in files)
-            or ".git" in files or ".git" in dirs or {"assets", "projectsettings"} <= dirs)
+            or bool((files | dirs) & VCS) or {"assets", "projectsettings"} <= dirs)
 
 
 def build_rule(name, files, dirs):
