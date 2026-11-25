@@ -7,11 +7,13 @@ one group, with its size and how safe it is to clean up. It removes nothing unle
 
 Two ways to use it:
 
+- [`prompt.md`](prompt.md): a prompt you paste into Claude Code, no install. The first one is a
+  few plain sentences with no code; two longer ones run the tool's exact scripts.
 - [`skill/`](skill/): an installable Claude Code skill.
-- [`prompt.md`](prompt.md): a prompt you paste into Claude Code, no install, in two versions.
 
-All of them run the same fixed scripts. Windows only, Python 3.8 or newer, nothing but
-Python's standard library.
+The skill and the two longer prompts run the same fixed scripts. Windows only, Python 3.8 or
+newer, nothing but Python's standard library. The short prompt has Claude measure in its own
+way, so its numbers can differ from run to run.
 
 ## The three rules
 
@@ -81,8 +83,8 @@ never opened, since that would download them.
   `scan-YYYYMMDD-HHMMSS.json`, the same data for the clean step.
 - Moves only the items you ask for to the Recycle Bin, and writes a log of that run as it goes,
   `clean-YYYYMMDD-HHMMSS.txt`, next to the report.
-- Sends nothing anywhere. Option 2 of the prompt downloads the five scripts from this repo,
-  after asking you; Option 1 downloads nothing.
+- Sends nothing anywhere. Option 3 of the prompt downloads the five scripts from this repo,
+  after asking you; Options 1 and 2 download nothing.
 
 The reports list your own file names, so think before you share them.
 
@@ -205,10 +207,19 @@ Nothing was removed. This scan only reads.
 
 ## Or just paste the prompt
 
-[`prompt.md`](prompt.md) has two prompts. Option 1 is the simple one: paste it into Claude Code
-and it writes the tool's five scripts from the prompt itself, checks they are exact, and runs
-the scan, with nothing downloaded. Option 2 is shorter: it asks first, then downloads the same
-five scripts from this repo. Put the drive or folder to scan on the prompt's first line.
+[`prompt.md`](prompt.md) has three prompts. Put the drive or folder to scan on the prompt's
+first line.
+
+- **Option 1, the short prompt** (recommended): a few plain sentences, no code. It names the
+  same groups, limits and never-offered folders as the tool, asks for one table by group with
+  sizes and how safe each is, and keeps the same promises: it only looks, and later moves only
+  what you name to the Recycle Bin. Claude works out how to measure, so the numbers can differ
+  from run to run and from the scripts, and a big drive can take longer.
+- **Option 2, paste and go with the exact scripts**: it writes the tool's five scripts from the
+  prompt itself, checks they are exact, and runs the scan, with nothing downloaded. Same results
+  as the skill.
+- **Option 3, use the scripts from this repo**: shorter than Option 2. It asks first, then
+  downloads the same five scripts from this repo.
 
 ## Tests
 

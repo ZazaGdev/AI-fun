@@ -72,10 +72,33 @@ class Prompt(unittest.TestCase):
         self.assertEqual(pairs, [(name, digest(read(SCRIPTS, name))) for name in FILES])
         self.assertIn("pathlib.Path.home()/'disk-cleanup'/'tool'", line)
 
+    def options(self):
+        rest, option3 = self.text.split("## Option 3", 1)
+        option1, option2 = rest.split("## Option 2", 1)
+        return option1, option2, option3
+
+    def test_the_short_prompt_is_first_and_plain(self):
+        option1 = self.options()[0]
+        self.assertIn("## Option 1: the short prompt", option1)
+        bodies = re.findall(r"^```text\n(.*?)\n```$", option1, re.S | re.M)
+        self.assertEqual(len(bodies), 1)
+        body = bodies[0]
+        self.assertTrue(body.startswith("Drive or folder to check: C:\\\n"), body[:40])
+        for word in ("python", "`", "http", "sha256"):  # no code, nothing to download
+            self.assertNotIn(word, body)
+        for words in ("Only look: do not delete, move or change anything.", "nothing changed in the last 7 days",
+                      "older than 30 days", "changed in the last 14 days", "500 MB or more unchanged for 6 months",
+                      "1 MB or more", "synced folders", "anything in use", "anything outside the drive or folder above",
+                      "don't run anything as administrator", "Then stop. Don't offer to remove anything.",
+                      "Only if I later name specific groups or item numbers", "move only those to the Recycle Bin",
+                      "never empty the Recycle Bin"):
+            self.assertIn(words, body)
+        self.assertLess(len(body), 2500)  # short enough to paste in a reply
+
     def test_both_prompts_start_with_the_path_and_stop_after_the_summary(self):
-        option1, option2 = self.text.split("## Option 2", 1)
-        bodies = re.findall(r"^`````text\n(.*?)\n`````$", option1, re.S | re.M)
-        bodies += re.findall(r"^```text\n(.*?)\n```$", option2, re.S | re.M)
+        _, option2, option3 = self.options()
+        bodies = re.findall(r"^`````text\n(.*?)\n`````$", option2, re.S | re.M)
+        bodies += re.findall(r"^```text\n(.*?)\n```$", option3, re.S | re.M)
         self.assertEqual(len(bodies), 2)
         for body in bodies:
             self.assertTrue(body.startswith("Path to scan: C:\\\n"), body[:40])
@@ -114,12 +137,12 @@ class Prompt(unittest.TestCase):
         finally:
             shutil.rmtree(home)
 
-    def test_option_2_downloads_the_five_scripts(self):
-        option2 = self.text.split("## Option 2", 1)[1]
+    def test_option_3_downloads_the_five_scripts(self):
+        option3 = self.options()[2]
         for name in FILES:
-            self.assertIn(RAW + name, option2)
-        self.assertIn("urllib", option2)
-        self.assertIn("ask me to confirm", option2)
+            self.assertIn(RAW + name, option3)
+        self.assertIn("urllib", option3)
+        self.assertIn("ask me to confirm", option3)
 
 
 class Skill(unittest.TestCase):

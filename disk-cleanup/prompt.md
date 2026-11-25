@@ -1,19 +1,52 @@
 # Disk cleanup prompt
 
-Two ways to see what could be cleaned up on a Windows drive or folder, without installing the
-skill. Most people should use Option 1. Both run the same fixed scripts as the skill, and both
-remove nothing unless you ask for something specific afterwards.
+Three ways to see what could be cleaned up on a Windows drive or folder, without installing the
+skill. Most people should use Option 1. All three remove nothing unless you ask for something
+specific afterwards.
 
 Put the drive or folder to scan on the first line of the prompt, in place of `C:\`.
 
-Jump to: [Option 1: paste and go](#option-1-paste-and-go-nothing-to-download) ·
-[Option 2: use the scripts from this repo](#option-2-use-the-scripts-from-this-repo)
+Jump to: [Option 1: the short prompt](#option-1-the-short-prompt) ·
+[Option 2: paste and go with the exact scripts](#option-2-paste-and-go-with-the-exact-scripts) ·
+[Option 3: use the scripts from this repo](#option-3-use-the-scripts-from-this-repo)
 
-## Option 1: paste and go (nothing to download)
+## Option 1: the short prompt
+
+Plain sentences, no code. Paste it into Claude Code on Windows, from any folder. It tells Claude
+what to look at, what never to touch and how to report, and Claude works out how to measure it.
+
+Because Claude picks its own way of measuring, the numbers can differ from run to run and from
+the scripted options below, and a big drive can take longer. For exact, repeatable results, use
+Option 2 or the skill.
+
+```text
+Drive or folder to check: C:\
+
+Look through the drive or folder above on my Windows PC and tell me what I could clean up to free space. Only look: do not delete, move or change anything.
+
+Measure these groups, each with its number of items and total size:
+
+Safe, comes back by itself: temp files and temp folders where nothing changed in the last 7 days, browser caches, app caches (Discord, Slack, Teams, VS Code and the like), graphics shader caches, my own crash dumps, and Python caches such as __pycache__.
+
+Easy to get back, reinstall or rebuild: package manager caches (npm, pip, NuGet, Gradle, Cargo and the like), installers in Downloads older than 30 days, unfinished downloads older than 7 days, and node_modules, build output and Python virtual environments in projects nobody has changed in the last 14 days.
+
+Your call, my own files: photos, videos, documents, archives, installers and disk images of 500 MB or more unchanged for 6 months, and the same kinds of files of 1 MB or more that exist twice or more with identical content. List these one by one.
+
+Never offer Windows' own folders, Program Files, installed programs and games, OneDrive, Dropbox or other synced folders, the Recycle Bin, anything in use, or anything outside the drive or folder above. Don't look into other users' profiles, don't follow links or junctions, and don't run anything as administrator. If one of those is big, just name it with its size and the Windows tool that handles it.
+
+Then show me one table: group, items, size and how safe, with a total of all the groups, and a line for what you only listed. Save the full list, with every item numbered and its path and size, to a text file in a disk-cleanup folder in my home folder, and tell me where it is. Then stop. Don't offer to remove anything.
+
+Only if I later name specific groups or item numbers, show me exactly what would go, and after I say yes, move only those to the Recycle Bin. Never delete anything for good, and never empty the Recycle Bin.
+```
+
+[Back to top](#disk-cleanup-prompt)
+
+## Option 2: paste and go with the exact scripts
 
 Copy the whole block below (the copy button is at its top right) and paste it into Claude Code
 on Windows, from any folder. It is long because it carries the tool's five files inside it;
-Claude writes them out, checks they are exact, and runs the scan.
+Claude writes them out, checks they are exact, and runs the scan. It gives the same results as
+the skill, and nothing is downloaded.
 
 `````text
 Path to scan: C:\
@@ -2555,7 +2588,7 @@ class WinSys:
 
 [Back to top](#disk-cleanup-prompt)
 
-## Option 2: use the scripts from this repo
+## Option 3: use the scripts from this repo
 
 A short prompt that downloads the tool's five files from this repo and runs them. Claude says
 what it will download and asks first.
